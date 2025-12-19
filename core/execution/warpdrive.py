@@ -15,68 +15,59 @@ from ..models import Node, NodeConnection, PipelineExecution, NodeExecution
 
 class WarpDrive:
     """
-    Main pipeline execution interface with artifact registration system.
+    Main pipeline execution interface with explicit artifact save/load system.
     
     Basic Usage:
-    ```python
-    from core.execution import WarpDrive
+        wd = WarpDrive()
+        
+        # Save artifacts with custom serialization
+        import pandas as pd
+        df = pd.DataFrame({'x': [1, 2, 3]})
+        wd.save_artifact('df', df, serialization_func=df.to_parquet)
+        
+        # In next node - load artifacts with custom deserialization
+        df = wd.get_arg('df', deserialization_func=pd.read_parquet)
+        result = df.shape
     
-    wd = WarpDrive()
-    
-    # Get input from previous nodes
-    df = wd.get_arg('df')  # Maps from connected output variable
-    
-    # Your processing code here
-    result = df.process()
-    
-    # Outputs are automatically detected and saved
-    ```
-    
-    Artifact Registration (for complex objects like DataFrames, ML models):
-    ```python
-    # Register a custom type with serialization functions
-    def my_serialize(obj):
-        return obj.to_dict()
-    
-    def my_deserialize(data):
-        return MyClass.from_dict(data)
-    
-    wd.register_artifact_type(MyClass, my_serialize, my_deserialize)
-    
-    # Register an instance as artifact
-    trained_model = train_model()
-    wd.register_artifact('model', trained_model)
-    
-    # Use artifacts in other nodes
-    model = wd.get_arg('model')
-    predictions = model.predict(data)
-    wd.register_artifact('results', predictions)
-    ```
-    
-    Built-in serializers support: pandas.DataFrame, numpy.ndarray, 
-    scikit-learn models, PyTorch models.
+    This supports cloud storage and container-based execution since artifacts
+    are saved to files that can be shared across containers or uploaded to S3/GCS.
     """
     
-    def __init__(self, execution_context: Optional[Dict[str, Any]] = None):
+    def __init__(self, execution_context: Optional[Dict[str, Any]] = None, 
+                 node_id: Optional[str] = None, 
+                 execution_id: Optional[str] = None):
         """
         Initialize WarpDrive with execution context.
         
         Args:
-            execution_context: Dictionary containing execution metadata
-                - node_id: Current node UUID
-                - execution_id: Pipeline execution UUID
-                - context_data: Available variables from previous nodes
-                - connections: List of NodeConnection objects
+            execution_context: Dictionary containing execution metadata (for local execution)
+            node_id: Node ID (for remote/container execution)
+            execution_id: Execution ID (for remote/container execution)
         """
+        # Get caller's frame to extract execution context if not provided
+        caller_frame = inspect.currentframe().f_back
+        caller_locals = caller_frame.f_locals if caller_frame else {}
+        
+        # Priority: explicit context > caller locals > node_id/execution_id
+        if execution_context is None:
+            execution_context = caller_locals.get('__warpdrive_context__', {})
+        
+        # If still no context and node_id/execution_id provided, load from environment or DB
+        if not execution_context and (node_id or execution_id):
+            node_id = node_id or os.environ.get('WARPDRIVE_NODE_ID')
+            execution_id = execution_id or os.environ.get('WARPDRIVE_EXECUTION_ID')
+            
+            if node_id and execution_id:
+                execution_context = self._load_context_from_storage(node_id, execution_id)
+        
         self.execution_context = execution_context or {}
-        self.node_id = self.execution_context.get('node_id')
-        self.execution_id = self.execution_context.get('execution_id')
+        self.node_id = self.execution_context.get('node_id') or node_id
+        self.execution_id = self.execution_context.get('execution_id') or execution_id
         self.context_data = self.execution_context.get('context_data', {})
         self.connections = self.execution_context.get('connections', [])
         
-        # Get caller's globals for automatic output detection
-        caller_frame = inspect.currentframe().f_back
-        self.caller_globals = caller_frame.f_globals if caller_frame else {}
+        # Get caller's locals for automatic output detection
+        self.caller_globals = caller_locals
         
         # Track initial variables to detect outputs later
         self.initial_vars = set(self.caller_globals.keys())
@@ -87,6 +78,9 @@ class WarpDrive:
         
         # Track variables loaded via get_arg() to exclude from outputs
         self.loaded_vars = set()
+        
+        # Track actual data objects loaded via get_arg() by id()
+        self.loaded_data_ids = set()
         
         # Set up artifact storage directory
         self.artifact_storage_dir = os.path.join(
@@ -102,7 +96,69 @@ class WarpDrive:
         # Load artifacts from context data if available
         self._load_artifacts_from_context()
         
-    def get_arg(self, variable_name: str) -> Any:
+    def save_artifact(self, name: str, data: Any, serialization_func=None):
+        """
+        Save an artifact with custom serialization function.
+        
+        Args:
+            name: Artifact variable name
+            data: Data to save
+            serialization_func: Function to serialize the data (e.g., df.to_parquet)
+                              If None, uses pickle
+        
+        Example:
+            wd.save_artifact('df', df, serialization_func=df.to_parquet)
+        """
+        import pickle
+        
+        # Create safe filename
+        safe_name = name.replace('/', '_').replace('\\', '_')
+        
+        if serialization_func:
+            # Use custom serialization - determine file extension from function name
+            func_name = getattr(serialization_func, '__name__', 'data')
+            if 'parquet' in func_name.lower():
+                ext = 'parquet'
+            elif 'csv' in func_name.lower():
+                ext = 'csv'
+            elif 'json' in func_name.lower():
+                ext = 'json'
+            else:
+                ext = 'dat'
+            
+            file_name = f"{safe_name}.{ext}"
+            file_path = os.path.join(self.artifact_storage_dir, file_name)
+            
+            # Call serialization function
+            try:
+                serialization_func(file_path)
+            except TypeError:
+                # Function might need the data as first argument
+                serialization_func(data, file_path)
+        else:
+            # Use pickle as fallback
+            file_name = f"{safe_name}.pkl"
+            file_path = os.path.join(self.artifact_storage_dir, file_name)
+            with open(file_path, 'wb') as f:
+                pickle.dump(data, f)
+        
+        # Store metadata for this artifact
+        self.artifacts[name] = {
+            'file': file_name,
+            'type': type(data).__name__,
+            'serialization_func': serialization_func
+        }
+        
+        # Update caller_globals with artifact reference
+        self.caller_globals[name] = {
+            '_artifact': True,
+            '_type': type(data).__name__,
+            '_file': file_name
+        }
+        
+        self.log(f"Saved artifact '{name}' to {file_name}")
+    
+    def get_arg(self, variable_name: str, deserialization_func=None) -> Any:
         """
         Get input variable from connected nodes, loaded artifacts, or context data.
         
@@ -140,27 +196,42 @@ class WarpDrive:
                         file_path = value.get('_file')
                         
                         if file_path:
-                            # Load from file
-                            deserializer = None
-                            for type_name, type_info in self.serializers.items():
-                                if type_name.endswith(f".{artifact_type}") or type_info['type_class'].__name__ == artifact_type:
-                                    deserializer = type_info['deserialize']
-                                    break
+                            # Load from file with provided or default deserializer
+                            full_path = os.path.join(self.artifact_storage_dir, file_path)
                             
-                            try:
-                                deserialized = self._load_artifact_from_file(file_path, deserializer)
-                                self.log(f"Loaded artifact from file: {source_var} (type: {artifact_type})")
-                                # Track this variable as loaded input
-                                self.loaded_vars.add(variable_name)
-                                return deserialized
-                            except Exception as e:
-                                raise ValueError(f"Failed to load artifact '{source_var}' from file: {str(e)}")
+                            if deserialization_func:
+                                # Use user-provided deserialization
+                                try:
+                                    deserialized = deserialization_func(full_path)
+                                except Exception as e:
+                                    raise ValueError(f"Failed to deserialize artifact '{source_var}' with provided function: {str(e)}")
+                            else:
+                                # Try to find registered deserializer or use pickle
+                                deserializer = None
+                                for type_name, type_info in self.serializers.items():
+                                    if type_name.endswith(f".{artifact_type}") or type_info['type_class'].__name__ == artifact_type:
+                                        deserializer = type_info['deserialize']
+                                        break
+                                
+                                try:
+                                    deserialized = self._load_artifact_from_file(full_path, deserializer)
+                                except Exception as e:
+                                    raise ValueError(f"Failed to load artifact '{source_var}' from file: {str(e)}")
+                            
+                            self.log(f"Loaded artifact from file: {source_var} (type: {artifact_type})")
+                            # Track this variable as loaded input
+                            self.loaded_vars.add(variable_name)
+                            # Track the object id to exclude from outputs
+                            self.loaded_data_ids.add(id(deserialized))
+                            return deserialized
                         else:
                             raise ValueError(f"Artifact '{source_var}' has no file path")
                     else:
                         # Regular serializable value
                         # Track this variable as loaded input
                         self.loaded_vars.add(variable_name)
+                        # Track the object id to exclude from outputs
+                        self.loaded_data_ids.add(id(value))
                         return value
                 else:
                     raise ValueError(f"Connected variable '{source_var}' not found in context")
@@ -176,22 +247,33 @@ class WarpDrive:
                 
                 if file_path:
                     # Look for appropriate deserializer
-                    deserializer = None
-                    for type_name, type_info in self.serializers.items():
-                        if (artifact_type == type_name or 
-                            type_name.endswith(f".{artifact_type}") or 
-                            artifact_type in type_name):
-                            deserializer = type_info['deserialize']
-                            break
+                    full_path = os.path.join(self.artifact_storage_dir, file_path)
                     
-                    try:
-                        deserialized = self._load_artifact_from_file(file_path, deserializer)
-                        self.log(f"Loaded artifact from file: {variable_name} (type: {artifact_type})")
-                        # Track this variable as loaded input
-                        self.loaded_vars.add(variable_name)
-                        return deserialized
-                    except Exception as e:
-                        raise ValueError(f"Failed to load artifact '{variable_name}': {str(e)}")
+                    if deserialization_func:
+                        # Use user-provided deserialization
+                        try:
+                            deserialized = deserialization_func(full_path)
+                        except Exception as e:
+                            raise ValueError(f"Failed to deserialize artifact '{variable_name}' with provided function: {str(e)}")
+                    else:
+                        # Try registered deserializers or pickle
+                        deserializer = None
+                        for type_name, type_info in self.serializers.items():
+                            if (artifact_type == type_name or 
+                                type_name.endswith(f".{artifact_type}") or 
+                                artifact_type in type_name):
+                                deserializer = type_info['deserialize']
+                                break
+                        
+                        try:
+                            deserialized = self._load_artifact_from_file(full_path, deserializer)
+                        except Exception as e:
+                            raise ValueError(f"Failed to load artifact '{variable_name}': {str(e)}")
+                    
+                    self.log(f"Loaded artifact from file: {variable_name} (type: {artifact_type})")
+                    # Track this variable as loaded input
+                    self.loaded_vars.add(variable_name)
+                    return deserialized
             
             # Track this variable as loaded input
             self.loaded_vars.add(variable_name)
@@ -234,6 +316,14 @@ class WarpDrive:
         
         # First, handle registered artifacts
         for artifact_name, artifact_info in self.artifacts.items():
+            # Skip artifacts that were loaded via get_arg() - they're inputs, not outputs
+            if artifact_name in self.loaded_vars:
+                continue
+            
+            # Only include artifacts that are new variables (created in this node)
+            if artifact_name not in new_vars:
+                continue
+                
             try:
                 # Save artifact to file
                 file_path = self._save_artifact_to_file(
@@ -553,6 +643,87 @@ class WarpDrive:
             self.register_artifact_type(torch.nn.Module, torch_serialize, torch_deserialize)
         except ImportError:
             pass
+    
+    def _load_context_from_storage(self, node_id: str, execution_id: str) -> Dict[str, Any]:
+        """
+        Load execution context from storage (for container-based execution).
+        
+        Args:
+            node_id: Node UUID
+            execution_id: Execution UUID
+            
+        Returns:
+            Execution context dictionary
+        """
+        try:
+            # Try to import Django models (may not be available in containers)
+            from ..models import Node, PipelineExecution, NodeConnection, NodeExecution
+            
+            # Get node and execution info
+            node = Node.objects.get(pk=node_id)
+            execution = PipelineExecution.objects.get(pk=execution_id)
+            
+            # Get all node executions from previous nodes
+            previous_executions = NodeExecution.objects.filter(
+                pipeline_execution=execution,
+                status='completed',
+                node__order__lt=node.order
+            ).order_by('node__order')
+            
+            # Build context data from previous node outputs
+            context_data = {}
+            for prev_exec in previous_executions:
+                if prev_exec.output_data:
+                    context_data.update(prev_exec.output_data)
+            
+            # Get connections
+            connections = list(NodeConnection.objects.filter(
+                from_node__pipeline=node.pipeline
+            ))
+            
+            return {
+                'node_id': str(node_id),
+                'execution_id': str(execution_id),
+                'context_data': context_data,
+                'connections': connections
+            }
+            
+        except ImportError:
+            # Running in container without Django - try to load from file
+            return self._load_context_from_file(node_id, execution_id)
+        except Exception as e:
+            print(f"[WARNING] Failed to load context from storage: {e}")
+            return {}
+    
+    def _load_context_from_file(self, node_id: str, execution_id: str) -> Dict[str, Any]:
+        """
+        Load execution context from file system (for containerized execution).
+        
+        Args:
+            node_id: Node UUID
+            execution_id: Execution UUID
+            
+        Returns:
+            Execution context dictionary
+        """
+        import pickle
+        
+        try:
+            # Look for context file in artifact storage
+            context_file = os.path.join(
+                settings.MEDIA_ROOT if hasattr(settings, 'MEDIA_ROOT') else '/tmp',
+                'artifacts',
+                str(execution_id),
+                f'_context_{node_id}.pkl'
+            )
+            
+            if os.path.exists(context_file):
+                with open(context_file, 'rb') as f:
+                    return pickle.load(f)
+        except Exception as e:
+            print(f"[WARNING] Failed to load context from file: {e}")
+        
+        return {}
     
     def _load_artifacts_from_context(self):
         """Load artifacts from context_data (from previous nodes)."""

@@ -480,6 +480,9 @@ def execute_node_code(code, context):
     except ImportError:
         sns = None
     
+    # Import WarpDrive for user access
+    from .execution.warpdrive import WarpDrive
+    
     # Create a safe execution environment
     exec_globals = {
         '__builtins__': {
@@ -498,6 +501,7 @@ def execute_node_code(code, context):
         'json': json,
         'math': math,
         'datetime': datetime,
+        'WarpDrive': WarpDrive,
     }
     
     # Add optional libraries if available
@@ -513,14 +517,6 @@ def execute_node_code(code, context):
     # Add context variables
     exec_locals = context.copy()
     
-    # If WarpDrive is in context, update it to track exec_locals
-    if 'wd' in exec_locals:
-        wd = exec_locals['wd']
-        if hasattr(wd, 'caller_globals'):
-            # Update WarpDrive to track exec_locals instead of its original frame
-            wd.caller_globals = exec_locals
-            wd.initial_vars = set(exec_locals.keys())
-    
     # Capture stdout
     old_stdout = sys.stdout
     captured_output = StringIO()
@@ -533,39 +529,71 @@ def execute_node_code(code, context):
         # Get output
         output_logs = captured_output.getvalue()
         
-        # Return all variables that were created or modified
+        # Collect output variables
         result = {}
+        import types
         
-        # Get WarpDrive instance if available to handle artifact serialization
-        wd = exec_locals.get('wd')
+        # Find WarpDrive instances to get artifacts
+        warpdrive_instances = []
+        for value in exec_locals.values():
+            if isinstance(value, WarpDrive):
+                warpdrive_instances.append(value)
         
-        # If WarpDrive is available, use its get_outputs() which has proper filtering
-        if wd and hasattr(wd, 'get_outputs'):
-            result = wd.get_outputs()
-        else:
-            # No WarpDrive - manual collection
-            result = {}
-            import types
+        # Collect artifacts from WarpDrive instances
+        # Artifacts are saved with metadata dicts containing _artifact marker
+        for wd in warpdrive_instances:
+            if hasattr(wd, 'artifacts') and wd.artifacts:
+                # Get the artifact reference dicts from caller_globals
+                if hasattr(wd, 'caller_globals'):
+                    for artifact_name in wd.artifacts.keys():
+                        if artifact_name in wd.caller_globals:
+                            artifact_ref = wd.caller_globals[artifact_name]
+                            # Only include if it's an artifact reference dict
+                            if isinstance(artifact_ref, dict) and artifact_ref.get('_artifact'):
+                                result[artifact_name] = artifact_ref
+        
+        # Collect loaded data ids from all WarpDrive instances to exclude them
+        loaded_data_ids = set()
+        for wd in warpdrive_instances:
+            if hasattr(wd, 'loaded_data_ids'):
+                loaded_data_ids.update(wd.loaded_data_ids)
+        
+        # Collect other output variables (exclude WarpDrive instances and artifacts)
+        artifact_names = set(result.keys())
+        for key, value in exec_locals.items():
+            # Skip internal variables
+            if key.startswith('_'):
+                continue
             
-            for key, value in exec_locals.items():
-                # Skip internal variables and unchanged context
-                if key.startswith('_') or key in ['wd', 'WarpDrive'] or (key in context and context[key] is value):
-                    continue
+            # Skip WarpDrive instances
+            if isinstance(value, WarpDrive):
+                continue
+            
+            # Skip module imports
+            if isinstance(value, types.ModuleType):
+                continue
+            
+            # Skip variables that are already in artifacts
+            if key in artifact_names:
+                continue
+            
+            # Skip variables loaded via get_arg() by checking object id
+            if id(value) in loaded_data_ids:
+                continue
                 
-                # Skip module imports
-                if isinstance(value, types.ModuleType):
-                    continue
-                    
-                # Check if this variable was modified or newly created
-                # Use 'is' comparison to avoid pandas comparison issues
-                if key not in context or context[key] is not value:
-                    # Try JSON serialization first
-                    try:
-                        json.dumps(value)
-                        result[key] = value
-                    except (TypeError, ValueError):
-                        # Non-serializable - convert to string
-                        result[key] = str(value)
+            # Skip unchanged context (use 'is' comparison to avoid pandas issues)
+            if key in context and context[key] is value:
+                continue
+            
+            # Check if this variable was modified or newly created
+            if key not in context or context[key] is not value:
+                # Try JSON serialization first
+                try:
+                    json.dumps(value)
+                    result[key] = value
+                except (TypeError, ValueError):
+                    # Non-serializable - convert to string
+                    result[key] = str(value)
         
         if output_logs:
             result['_output_logs'] = output_logs

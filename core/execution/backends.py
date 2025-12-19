@@ -46,46 +46,213 @@ class LocalExecutionBackend(ExecutionBackend):
             from_node__pipeline=node.pipeline
         ))
         
-        # Create execution context
-        with NodeExecutionContext(node, execution, context, connections) as wd:
-            # Prepare the code with WarpDrive injection
-            enhanced_code = self._prepare_code_with_warpdrive(node.code)
-            
-            # Execute with context
-            node_context = context.copy()
-            
-            # Add connected inputs
-            for connection in connections:
-                if connection.to_node == node:
-                    source_var = connection.from_output
-                    target_var = connection.to_input
-                    
-                    if source_var in context:
-                        node_context[target_var] = context[source_var]
-            
-            # Add WarpDrive to execution context
-            node_context['wd'] = wd
-            node_context['WarpDrive'] = type(wd)
-            
-            # Execute the enhanced code
-            outputs = execute_node_code(enhanced_code, node_context)
-            
-            return outputs
-    
-    def _prepare_code_with_warpdrive(self, code: str) -> str:
-        """Prepare code by injecting WarpDrive if needed."""
-        # Check if code already imports or uses WarpDrive
-        if 'WarpDrive' in code or 'wd =' in code:
-            return code
+        # Execute with context
+        node_context = context.copy()
         
-        # Auto-inject WarpDrive for convenience
-        enhanced_code = f"""
-# Auto-injected WarpDrive instance
-# wd = WarpDrive() - already provided in context
+        # Add connected inputs
+        for connection in connections:
+            if connection.to_node == node:
+                source_var = connection.from_output
+                target_var = connection.to_input
+                
+                if source_var in context:
+                    node_context[target_var] = context[source_var]
+        
+        # Add execution metadata for WarpDrive initialization
+        node_context['__warpdrive_context__'] = {
+            'node_id': str(node.id),
+            'execution_id': str(execution.id),
+            'context_data': context,
+            'connections': connections
+        }
+        
+        # Also set environment variables for container-based execution
+        import os
+        os.environ['WARPDRIVE_NODE_ID'] = str(node.id)
+        os.environ['WARPDRIVE_EXECUTION_ID'] = str(execution.id)
+        
+        # Execute the code directly (user creates WarpDrive if needed)
+        outputs = execute_node_code(node.code, node_context)
+        
+        return outputs
 
-{code}
-"""
-        return enhanced_code
+
+class DockerExecutionBackend(ExecutionBackend):
+    """Execute nodes in Docker containers with shared volume for artifacts."""
+    
+    def __init__(self, image: str = 'python:3.11-slim', 
+                 volume_path: str = None):
+        self.image = image
+        # Use Django MEDIA_ROOT or fallback to /tmp
+        try:
+            from django.conf import settings
+            self.volume_path = volume_path or settings.MEDIA_ROOT
+        except:
+            self.volume_path = volume_path or '/tmp/pipeline-artifacts'
+    
+    def execute_node(self, node: Node, context: Dict[str, Any], 
+                    execution: PipelineExecution) -> Dict[str, Any]:
+        """Execute node in a Docker container."""
+        import subprocess
+        import tempfile
+        
+        # Get connections for this node
+        from ..models import NodeConnection
+        connections = list(NodeConnection.objects.filter(
+            from_node__pipeline=node.pipeline
+        ))
+        
+        # Prepare execution script with WarpDrive support
+        script = self._prepare_container_script(node, context, execution, connections)
+        
+        # Create temporary file for the script
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(script)
+            script_file = f.name
+        
+        try:
+            # Run Docker container with mounted volumes
+            container_name = f"pipeline-{execution.id}-{node.id}"[:63]
+            
+            cmd = [
+                'docker', 'run',
+                '--rm',
+                '--name', container_name,
+                '-v', f'{script_file}:/app/node_code.py',
+                '-v', f'{self.volume_path}:/artifacts',
+                '-e', f'WARPDRIVE_NODE_ID={node.id}',
+                '-e', f'WARPDRIVE_EXECUTION_ID={execution.id}',
+                self.image,
+                'python', '/app/node_code.py'
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            
+            if result.returncode != 0:
+                raise Exception(f"Container execution failed: {result.stderr}")
+            
+            # Parse outputs from stdout (JSON)
+            import json
+            outputs = json.loads(result.stdout)
+            return outputs
+            
+        finally:
+            os.unlink(script_file)
+    
+    def _prepare_container_script(self, node: Node, context: Dict[str, Any],
+                                 execution: PipelineExecution, 
+                                 connections: list) -> str:
+        """Prepare Python script to run in container."""
+        
+        # Serialize connections and context
+        connections_data = []
+        for conn in connections:
+            connections_data.append({
+                'from_node_id': str(conn.from_node.id),
+                'to_node_id': str(conn.to_node.id),
+                'from_output': conn.from_output,
+                'to_input': conn.to_input
+            })
+        
+        script = f'''
+import os
+import sys
+import json
+import pickle
+import base64
+from typing import Dict, Any, Optional, List
+
+# Minimal WarpDrive implementation for container execution
+class WarpDrive:
+    def __init__(self, node_id=None, execution_id=None):
+        self.node_id = node_id or os.environ.get('WARPDRIVE_NODE_ID')
+        self.execution_id = execution_id or os.environ.get('WARPDRIVE_EXECUTION_ID')
+        self.context_data = {json.dumps(context)}
+        self.connections = {json.dumps(connections_data)}
+        self.artifact_storage_dir = f'/artifacts/{{self.execution_id}}'
+        os.makedirs(self.artifact_storage_dir, exist_ok=True)
+        self.caller_globals = globals()
+        self.initial_vars = set(self.caller_globals.keys())
+        self.loaded_vars = set()
+        
+    def get_arg(self, variable_name):
+        """Get input variable through connections."""
+        # Find connection
+        for conn in self.connections:
+            if conn['to_node_id'] == self.node_id and conn['to_input'] == variable_name:
+                source_var = conn['from_output']
+                if source_var in self.context_data:
+                    value = self.context_data[source_var]
+                    
+                    # Load artifact if needed
+                    if isinstance(value, dict) and value.get('_artifact'):
+                        file_path = value.get('_file')
+                        if file_path:
+                            value = self._load_artifact(file_path)
+                    
+                    self.loaded_vars.add(variable_name)
+                    return value
+        
+        raise ValueError(f"Input variable '{{variable_name}}' not found")
+    
+    def _load_artifact(self, file_path):
+        """Load artifact from file."""
+        full_path = f'/artifacts/{{self.execution_id}}/{{os.path.basename(file_path)}}'
+        with open(full_path, 'rb') as f:
+            return pickle.load(f)
+    
+    def get_outputs(self):
+        """Collect outputs (simplified for container)."""
+        outputs = {{}}
+        current_vars = set(self.caller_globals.keys())
+        new_vars = current_vars - self.initial_vars - self.loaded_vars
+        
+        for var_name in new_vars:
+            if var_name.startswith('_') or var_name in ['wd', 'WarpDrive']:
+                continue
+            
+            value = self.caller_globals[var_name]
+            
+            try:
+                json.dumps(value)
+                outputs[var_name] = value
+            except (TypeError, ValueError):
+                # Non-serializable - save as artifact
+                artifact_file = f'{{var_name}}.pkl'
+                file_path = os.path.join(self.artifact_storage_dir, artifact_file)
+                with open(file_path, 'wb') as f:
+                    pickle.dump(value, f)
+                outputs[var_name] = {{
+                    '_artifact': True,
+                    '_type': type(value).__name__,
+                    '_file': artifact_file
+                }}
+        
+        return outputs
+
+# Make WarpDrive available
+globals()['WarpDrive'] = WarpDrive
+
+# Execute user code
+{node.code}
+
+# Collect and output results
+if 'wd' in globals():
+    outputs = wd.get_outputs()
+else:
+    # Fallback: collect all new variables
+    outputs = {{}}
+    for name, value in globals().items():
+        if not name.startswith('_') and name not in ['WarpDrive', 'os', 'sys', 'json', 'pickle']:
+            try:
+                json.dumps(value)
+                outputs[name] = value
+            except:
+                pass
+
+print(json.dumps(outputs))
+'''
+        return script
 
 
 class KubernetesExecutionBackend(ExecutionBackend):
