@@ -1,0 +1,161 @@
+{% extends 'core/base.html' %}
+
+{% block title %}{{ pipeline.name }} - Execution History - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2>
+                <i class="fas fa-history"></i> Execution History
+            </h2>
+            <p class="text-muted mb-0">
+                <a href="{% url 'pipeline_detail' pipeline.pk %}" class="text-decoration-none">
+                    <i class="fas fa-project-diagram"></i> {{ pipeline.name }}
+                </a>
+            </p>
+        </div>
+        <div>
+            <a href="{% url 'pipeline_detail' pipeline.pk %}" class="btn btn-outline-primary">
+                <i class="fas fa-arrow-left"></i> Back to Pipeline
+            </a>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="fas fa-play-circle"></i> Recent Executions 
+                        <span class="badge bg-secondary">{{ executions|length }}</span>
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if executions %}
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Status</th>
+                                        <th>Started</th>
+                                        <th>Duration</th>
+                                        <th>Started By</th>
+                                        <th>Nodes</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for execution in executions %}
+                                        <tr>
+                                            <td>
+                                                <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }}">
+                                                    <i class="fas fa-{{ execution.status|yesno:'check,times,clock' }}"></i>
+                                                    {{ execution.get_status_display }}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <small class="text-muted">{{ execution.started_at|date:"M d, Y H:i" }}</small>
+                                            </td>
+                                            <td>
+                                                {% if execution.completed_at %}
+                                                    {% with duration=execution.completed_at|timeuntil:execution.started_at %}
+                                                        <small class="text-muted">{{ duration }}</small>
+                                                    {% endwith %}
+                                                {% elif execution.status == 'running' %}
+                                                    <small class="text-warning">
+                                                        <i class="fas fa-spinner fa-spin"></i> Running...
+                                                    </small>
+                                                {% else %}
+                                                    <small class="text-muted">-</small>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <small>{{ execution.started_by.username }}</small>
+                                            </td>
+                                            <td>
+                                                <small class="text-muted">
+                                                    {{ execution.node_executions.count }} nodes
+                                                </small>
+                                            </td>
+                                            <td>
+                                                <div class="btn-group btn-group-sm">
+                                                    <a href="{% url 'execution_detail' execution.pk %}" 
+                                                       class="btn btn-outline-info btn-sm" 
+                                                       title="View Details">
+                                                        <i class="fas fa-eye"></i>
+                                                    </a>
+                                                    {% if execution.status == 'running' %}
+                                                        <button class="btn btn-outline-warning btn-sm" 
+                                                                onclick="refreshExecution('{{ execution.pk }}')"
+                                                                title="Refresh Status">
+                                                            <i class="fas fa-sync-alt"></i>
+                                                        </button>
+                                                    {% endif %}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <div class="text-center py-5">
+                            <i class="fas fa-play-circle fa-3x text-muted mb-3"></i>
+                            <h5 class="text-muted">No Executions Yet</h5>
+                            <p class="text-muted">This pipeline hasn't been executed yet.</p>
+                            <a href="{% url 'pipeline_detail' pipeline.pk %}" class="btn btn-primary">
+                                <i class="fas fa-play"></i> Execute Pipeline
+                            </a>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Stats -->
+    {% if executions %}
+    <div class="row mt-4">
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h5 class="card-title">{{ stats.total }}</h5>
+                    <p class="card-text small text-muted">Total Executions</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h5 class="card-title text-success">{{ stats.completed }}</h5>
+                    <p class="card-text small text-muted">Successful</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h5 class="card-title text-danger">{{ stats.failed }}</h5>
+                    <p class="card-text small text-muted">Failed</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h5 class="card-title text-warning">{{ stats.running }}</h5>
+                    <p class="card-text small text-muted">Running</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function refreshExecution(executionId) {
+    location.reload();
+}
+</script>
+{% endblock %}

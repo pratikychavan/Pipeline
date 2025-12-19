@@ -1,0 +1,138 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Delete Pipeline - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card border-danger">
+                <div class="card-header bg-danger text-white">
+                    <h4 class="mb-0">
+                        <i class="fas fa-exclamation-triangle"></i> Delete Pipeline
+                    </h4>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-warning" role="alert">
+                        <h5 class="alert-heading">
+                            <i class="fas fa-warning"></i> Warning: This action cannot be undone!
+                        </h5>
+                        <p class="mb-0">
+                            You are about to permanently delete the pipeline <strong>"{{ object.name }}"</strong> 
+                            and all of its associated data.
+                        </p>
+                    </div>
+
+                    <h5>Pipeline Details:</h5>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <table class="table table-sm">
+                                <tr>
+                                    <th>Name:</th>
+                                    <td><strong>{{ object.name }}</strong></td>
+                                </tr>
+                                <tr>
+                                    <th>Description:</th>
+                                    <td>{{ object.description|default:"No description" }}</td>
+                                </tr>
+                                <tr>
+                                    <th>Created:</th>
+                                    <td>{{ object.created_at|date:"M d, Y H:i" }}</td>
+                                </tr>
+                                <tr>
+                                    <th>Owner:</th>
+                                    <td>{{ object.created_by.username }}</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card bg-light">
+                                <div class="card-header">
+                                    <h6 class="mb-0">What will be deleted:</h6>
+                                </div>
+                                <div class="card-body">
+                                    <ul class="list-unstyled mb-0">
+                                        <li>
+                                            <i class="fas fa-sitemap text-primary"></i> 
+                                            <strong>{{ object.nodes.count }}</strong> node{{ object.nodes.count|pluralize }}
+                                        </li>
+                                        <li>
+                                            <i class="fas fa-link text-info"></i> 
+                                            All node connections
+                                        </li>
+                                        <li>
+                                            <i class="fas fa-history text-warning"></i> 
+                                            <strong>{{ object.executions.count }}</strong> execution{{ object.executions.count|pluralize }} record{{ object.executions.count|pluralize }}
+                                        </li>
+                                        <li>
+                                            <i class="fas fa-code text-secondary"></i> 
+                                            All node source code
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {% if object.nodes.exists %}
+                    <h6 class="mt-4">Nodes in this pipeline:</h6>
+                    <div class="row">
+                        {% for node in object.nodes.all %}
+                        <div class="col-md-4 mb-2">
+                            <div class="card card-body bg-light p-2">
+                                <small>
+                                    <strong>{{ node.name }}</strong><br>
+                                    <span class="text-muted">{{ node.get_status_display }}</span>
+                                </small>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    <form method="post" class="mt-4">
+                        {% csrf_token %}
+                        
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="confirmDelete" required>
+                            <label class="form-check-label" for="confirmDelete">
+                                <strong>I understand that this action cannot be undone and all data will be permanently lost.</strong>
+                            </label>
+                        </div>
+                        
+                        <div class="d-flex justify-content-between">
+                            <a href="{% url 'pipeline_detail' object.pk %}" class="btn btn-secondary">
+                                <i class="fas fa-arrow-left"></i> Cancel
+                            </a>
+                            <button type="submit" class="btn btn-danger" id="deleteBtn" disabled>
+                                <i class="fas fa-trash"></i> Yes, Delete Pipeline
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Enable delete button only when checkbox is checked
+    document.addEventListener('DOMContentLoaded', function() {
+        const checkbox = document.getElementById('confirmDelete');
+        const deleteBtn = document.getElementById('deleteBtn');
+        
+        checkbox.addEventListener('change', function() {
+            deleteBtn.disabled = !this.checked;
+        });
+        
+        // Double confirmation on form submit
+        document.querySelector('form').addEventListener('submit', function(e) {
+            if (!confirm('Are you absolutely sure you want to delete this pipeline? This action cannot be undone.')) {
+                e.preventDefault();
+            }
+        });
+    });
+</script>
+{% endblock %}

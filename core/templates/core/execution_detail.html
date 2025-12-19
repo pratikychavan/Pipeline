@@ -1,0 +1,356 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Execution Details - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2>
+                <i class="fas fa-play-circle"></i> 
+                Execution: {{ execution.pipeline.name }}
+            </h2>
+            <p class="text-muted mb-0">
+                Started {{ execution.started_at|date:"M d, Y H:i:s" }} by {{ execution.started_by.username }}
+            </p>
+        </div>
+        <div>
+            <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }} fs-6">
+                {{ execution.get_status_display }}
+            </span>
+        </div>
+    </div>
+    
+    <!-- Execution Summary -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="fas fa-info-circle"></i> Execution Summary</h5>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-3">
+                    <strong>Status:</strong><br>
+                    <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }}">
+                        {{ execution.get_status_display }}
+                    </span>
+                </div>
+                <div class="col-md-3">
+                    <strong>Started:</strong><br>
+                    {{ execution.started_at|date:"M d, Y H:i:s" }}
+                </div>
+                <div class="col-md-3">
+                    <strong>Duration:</strong><br>
+                    {% if execution.completed_at %}
+                        {{ execution.completed_at|timeuntil:execution.started_at }}
+                    {% else %}
+                        <span class="text-muted">Running...</span>
+                    {% endif %}
+                </div>
+                <div class="col-md-3">
+                    <strong>Nodes:</strong><br>
+                    {{ node_executions|length }} total
+                </div>
+            </div>
+            
+            {% if execution.error_message %}
+                <div class="alert alert-danger mt-3">
+                    <strong>Error:</strong> {{ execution.error_message }}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Node Executions -->
+    <div class="card">
+        <div class="card-header">
+            <h5 class="mb-0">
+                <i class="fas fa-list"></i> Node Execution Details
+            </h5>
+        </div>
+        <div class="card-body p-0">
+            {% if node_executions %}
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Order</th>
+                                <th>Node</th>
+                                <th>Status</th>
+                                <th>Duration</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for node_exec in node_executions %}
+                                <tr>
+                                    <td>{{ forloop.counter }}</td>
+                                    <td>
+                                        <strong>{{ node_exec.node.name }}</strong>
+                                        {% if node_exec.node.description %}
+                                            <br><small class="text-muted">{{ node_exec.node.description }}</small>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-{{ node_exec.status|yesno:'success,danger,warning' }}">
+                                            {{ node_exec.get_status_display }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        {% if node_exec.completed_at and node_exec.started_at %}
+                                            {{ node_exec.completed_at|timeuntil:node_exec.started_at }}
+                                        {% elif node_exec.started_at %}
+                                            <span class="text-muted">Running...</span>
+                                        {% else %}
+                                            <span class="text-muted">Not started</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <button class="btn btn-sm btn-outline-info" 
+                                                onclick="showNodeDetails('{{ node_exec.pk }}')"
+                                                data-node-exec-id="{{ node_exec.pk }}">
+                                            <i class="fas fa-eye"></i> Details
+                                        </button>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="text-center py-4">
+                    <i class="fas fa-clock fa-2x text-muted mb-3"></i>
+                    <p class="text-muted">No node executions found.</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <div class="mt-4">
+        <a href="{% url 'execution_list' %}" class="btn btn-secondary">
+            <i class="fas fa-arrow-left"></i> Back to Execution History
+        </a>
+        <a href="{% url 'pipeline_detail' execution.pipeline.pk %}" class="btn btn-outline-primary">
+            <i class="fas fa-project-diagram"></i> View Pipeline
+        </a>
+    </div>
+</div>
+
+<!-- Node Execution Details Modal -->
+<div class="modal fade" id="nodeDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-cube"></i> Node Execution Details
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="nodeDetailsContent" style="max-height: 70vh; overflow-y: auto;">
+                <!-- Content will be loaded here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Store node execution data in global scope
+let nodeExecutions = {};
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize node execution data
+    nodeExecutions = {
+        {% for node_exec in node_executions %}
+        '{{ node_exec.pk }}': {
+            'node_name': '{{ node_exec.node.name|escapejs }}',
+            'status': '{{ node_exec.status }}',
+            'started_at': '{{ node_exec.started_at|date:"M d, Y H:i:s"|default:"Not started" }}',
+            'completed_at': '{{ node_exec.completed_at|date:"M d, Y H:i:s"|default:"Not completed" }}',
+            'error_message': '{{ node_exec.error_message|escapejs }}',
+            'output_logs': '{{ node_exec.output_logs|escapejs }}',
+            'input_data': {{ node_exec.input_data_json|safe }},
+            'output_data': {{ node_exec.output_data_json|safe }},
+            'code': '{{ node_exec.node.code|escapejs }}'
+        }{% if not forloop.last %},{% endif %}
+        {% endfor %}
+    };
+});
+
+// Define functions in global scope
+function showNodeDetails(nodeExecId) {
+    try {
+        const nodeExec = nodeExecutions[nodeExecId];
+        if (!nodeExec) {
+                console.error('Node execution not found:', nodeExecId);
+                return;
+            }
+            
+            // Safely parse JSON data
+            let inputData = {};
+            let outputData = {};
+            
+            try {
+                inputData = typeof nodeExec.input_data === 'string' ? JSON.parse(nodeExec.input_data) : nodeExec.input_data;
+            } catch (e) {
+                inputData = nodeExec.input_data || {};
+            }
+            
+            try {
+                outputData = typeof nodeExec.output_data === 'string' ? JSON.parse(nodeExec.output_data) : nodeExec.output_data;
+            } catch (e) {
+                outputData = nodeExec.output_data || {};
+            }
+            
+            let html = `
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6><i class="fas fa-info-circle"></i> Execution Info</h6>
+                        <table class="table table-sm">
+                            <tr><th>Node:</th><td>${nodeExec.node_name || 'Unknown'}</td></tr>
+                            <tr><th>Status:</th><td><span class="badge bg-${getStatusColor(nodeExec.status)}">${nodeExec.status || 'Unknown'}</span></td></tr>
+                            <tr><th>Started:</th><td>${nodeExec.started_at || 'Not started'}</td></tr>
+                            <tr><th>Completed:</th><td>${nodeExec.completed_at || 'Not completed'}</td></tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <h6><i class="fas fa-exchange-alt"></i> Data Flow</h6>
+                        <div class="mb-3">
+                            <strong>Input Data:</strong>
+                            ${formatDataAsTable(inputData, 'No input data')}
+                        </div>
+                        <div>
+                            <strong>Output Data:</strong>
+                            ${formatDataAsTable(outputData, 'No output data')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        
+            if (nodeExec.error_message) {
+                // Unescape newlines and format the error message
+                const errorMsg = nodeExec.error_message
+                    .replace(/\\n/g, '\n')
+                    .replace(/\\t/g, '\t');
+                    
+                html += `
+                    <div class="mt-3">
+                        <h6><i class="fas fa-exclamation-triangle text-danger"></i> Error Details</h6>
+                        <div class="alert alert-danger mb-0">
+                            <pre class="mb-0" style="white-space: pre-wrap; font-family: monospace; font-size: 0.9em;">${escapeHtml(errorMsg)}</pre>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            if (nodeExec.output_logs) {
+                html += `
+                    <div class="mt-3">
+                        <h6><i class="fas fa-terminal"></i> Output Logs</h6>
+                        <pre class="bg-dark text-light p-3 rounded">${nodeExec.output_logs}</pre>
+                    </div>
+                `;
+            }
+            
+            html += `
+                <div class="mt-3">
+                    <h6><i class="fas fa-code"></i> Node Code</h6>
+                    <pre class="bg-dark text-light p-3 rounded">${nodeExec.code || 'No code available'}</pre>
+                </div>
+            `;
+            
+            const contentElement = document.getElementById('nodeDetailsContent');
+            if (contentElement) {
+                contentElement.innerHTML = html;
+                const modal = document.getElementById('nodeDetailsModal');
+                if (modal) {
+                    new bootstrap.Modal(modal).show();
+                }
+            }
+    } catch (error) {
+        console.error('Error showing node details:', error);
+        alert('Error displaying node details. Please check the console for more information.');
+    }
+}
+
+function getStatusColor(status) {
+    switch(status) {
+        case 'completed': return 'success';
+        case 'failed': return 'danger';
+        case 'running': return 'warning';
+        default: return 'secondary';
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatDataAsTable(data, emptyMessage) {
+    if (!data || Object.keys(data).length === 0) {
+        return `<div class="text-muted small">${emptyMessage}</div>`;
+    }
+    
+    let tableHtml = '<div class="table-responsive" style="max-height: 300px; overflow-y: auto;">';
+    tableHtml += '<table class="table table-sm table-bordered small mb-0">';
+    tableHtml += '<thead class="table-light" style="position: sticky; top: 0; z-index: 10;"><tr><th style="width: 30%;">Variable</th><th>Value</th><th style="width: 15%;">Type</th></tr></thead>';
+    tableHtml += '<tbody>';
+    
+    for (const [key, value] of Object.entries(data)) {
+        // Skip internal variables
+        if (key.startsWith('_')) continue;
+        
+        let displayValue = '';
+        let typeInfo = '';
+        
+        // Handle artifacts
+        if (value && typeof value === 'object' && value._artifact) {
+            typeInfo = `<span class="badge bg-info">${value._type || 'Artifact'}</span>`;
+            if (value._file) {
+                displayValue = `<small class="text-muted">Artifact stored in file</small>`;
+            } else if (value._string_repr) {
+                displayValue = `<code style="font-size: 0.85em; word-break: break-all;">${escapeHtml(value._string_repr.substring(0, 100))}${value._string_repr.length > 100 ? '...' : ''}</code>`;
+            } else if (value._error) {
+                displayValue = `<span class="text-danger">${escapeHtml(value._error)}</span>`;
+            }
+        } else if (typeof value === 'object' && value !== null) {
+            // Regular objects/arrays
+            const jsonStr = JSON.stringify(value, null, 2);
+            if (jsonStr.length > 150) {
+                displayValue = `<pre class="mb-0 small" style="max-height: 100px; overflow-y: auto; font-size: 0.8em; word-break: break-all;">${escapeHtml(jsonStr)}</pre>`;
+            } else {
+                displayValue = `<code style="font-size: 0.85em; word-break: break-all;">${escapeHtml(jsonStr)}</code>`;
+            }
+            typeInfo = Array.isArray(value) ? 'Array' : 'Object';
+        } else {
+            // Primitive values
+            displayValue = `<code style="font-size: 0.85em; word-break: break-all;">${escapeHtml(String(value))}</code>`;
+            typeInfo = typeof value;
+        }
+        
+        tableHtml += `
+            <tr>
+                <td style="word-break: break-word;"><strong>${escapeHtml(key)}</strong></td>
+                <td style="word-break: break-word;">${displayValue}</td>
+                <td><span class="badge bg-secondary">${typeInfo}</span></td>
+            </tr>
+        `;
+    }
+    
+    tableHtml += '</tbody></table></div>';
+    return tableHtml;
+}
+
+// Auto-refresh if execution is running
+document.addEventListener('DOMContentLoaded', function() {
+    {% if execution.status == 'running' %}
+    setTimeout(function() {
+        location.reload();
+    }, 5000);
+    {% endif %}
+});
+</script>
+{% endblock %}

@@ -1,0 +1,501 @@
+{% extends 'core/base.html' %}
+
+{% block title %}{{ title }} - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="row justify-content-center">
+        <div class="col-md-10 col-lg-8">
+            <div class="card">
+                <div class="card-header">
+                    <h4 class="mb-0">
+                        <i class="fas fa-cube"></i> 
+                        {{ title }}
+                    </h4>
+                    {% if node %}
+                        <small class="text-muted">Pipeline: {{ pipeline.name }}</small>
+                    {% endif %}
+                </div>
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="{{ form.name.id_for_label }}" class="form-label">
+                                        Node Name <span class="text-danger">*</span>
+                                    </label>
+                                    {{ form.name }}
+                                    {% if form.name.errors %}
+                                        <div class="text-danger small">
+                                            {{ form.name.errors }}
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="{{ form.description.id_for_label }}" class="form-label">
+                                        Description
+                                    </label>
+                                    {{ form.description }}
+                                    {% if form.description.errors %}
+                                        <div class="text-danger small">
+                                            {{ form.description.errors }}
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="{{ form.input_vars_text.id_for_label }}" class="form-label">
+                                        Input Variables
+                                    </label>
+                                    {{ form.input_vars_text }}
+                                    {% if form.input_vars_text.errors %}
+                                        <div class="text-danger small">
+                                            {{ form.input_vars_text.errors }}
+                                        </div>
+                                    {% endif %}
+                                    <div class="form-text">
+                                        {{ form.input_vars_text.help_text }}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="{{ form.output_vars_text.id_for_label }}" class="form-label">
+                                        Output Variables
+                                    </label>
+                                    <div class="input-group">
+                                        {{ form.output_vars_text }}
+                                        <button type="button" class="btn btn-outline-primary" id="autoDetectBtn" title="Auto-detect outputs from code">
+                                            <i class="fas fa-wand-magic-sparkles"></i> Auto-Detect
+                                        </button>
+                                    </div>
+                                    {% if form.output_vars_text.errors %}
+                                        <div class="text-danger small">
+                                            {{ form.output_vars_text.errors }}
+                                        </div>
+                                    {% endif %}
+                                    <div class="form-text">
+                                        {{ form.output_vars_text.help_text }} Click "Auto-Detect" to automatically find output variables from your code.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="{{ form.code.id_for_label }}" class="form-label">
+                                Python Code <span class="text-danger">*</span>
+                            </label>
+                            {{ form.code }}
+                            {% if form.code.errors %}
+                                <div class="text-danger small">
+                                    {{ form.code.errors }}
+                                </div>
+                            {% endif %}
+                            <div class="form-text">
+                                Write Python code that will be executed when this node runs. 
+                                Use input variables from previous nodes and create output variables for subsequent nodes.
+                            </div>
+                        </div>
+                        
+                        <!-- Code Examples -->
+                        <div class="card bg-light mb-3">
+                            <div class="card-header">
+                                <h6 class="mb-0">
+                                    <i class="fas fa-lightbulb"></i> Code Examples
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="accordion" id="examplesAccordion">
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button" 
+                                                    data-bs-toggle="collapse" data-bs-target="#example1">
+                                                Data Processing
+                                            </button>
+                                        </h2>
+                                        <div id="example1" class="accordion-collapse collapse" data-bs-parent="#examplesAccordion">
+                                            <div class="accordion-body">
+                                                <pre class="bg-dark text-light p-2 rounded"><code># Process input data
+if 'data' in locals():
+    processed_data = [x * 2 for x in data if x > 0]
+    result_count = len(processed_data)
+    print(f"Processed {result_count} items")
+else:
+    processed_data = []
+    result_count = 0
+    print("No input data found")</code></pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button" 
+                                                    data-bs-toggle="collapse" data-bs-target="#example2">
+                                                Mathematical Operations
+                                            </button>
+                                        </h2>
+                                        <div id="example2" class="accordion-collapse collapse" data-bs-parent="#examplesAccordion">
+                                            <div class="accordion-body">
+                                                <pre class="bg-dark text-light p-2 rounded"><code># Mathematical calculations
+import math
+
+# Use input variables
+input_value = locals().get('input_value', 10)
+
+# Perform calculations
+squared = input_value ** 2
+sqrt_value = math.sqrt(abs(input_value))
+factorial = math.factorial(min(input_value, 10))
+
+# Output results
+calculation_result = {
+    'original': input_value,
+    'squared': squared,
+    'sqrt': sqrt_value,
+    'factorial': factorial
+}
+
+print(f"Results: {calculation_result}")</code></pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button" 
+                                                    data-bs-toggle="collapse" data-bs-target="#example3">
+                                                String Processing
+                                            </button>
+                                        </h2>
+                                        <div id="example3" class="accordion-collapse collapse" data-bs-parent="#examplesAccordion">
+                                            <div class="accordion-body">
+                                                <pre class="bg-dark text-light p-2 rounded"><code># Text processing
+text_input = locals().get('text_input', 'Hello World')
+
+# Process text
+processed_text = text_input.upper()
+word_count = len(text_input.split())
+char_count = len(text_input)
+
+# Create summary
+text_summary = {
+    'original': text_input,
+    'processed': processed_text,
+    'words': word_count,
+    'characters': char_count
+}
+
+print(f"Text analysis complete: {word_count} words, {char_count} characters")</code></pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Hidden fields -->
+                        {{ form.input_variables }}
+                        {{ form.output_variables }}
+                        
+                        <div class="d-flex justify-content-between">
+                            <a href="{% url 'pipeline_detail' pipeline.pk %}" class="btn btn-secondary">
+                                <i class="fas fa-arrow-left"></i> Back to Pipeline
+                            </a>
+                            <div>
+                                <button type="button" class="btn btn-outline-info me-2" id="validateCodeBtn">
+                                    <i class="fas fa-check-circle"></i> Validate Code
+                                </button>
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-save"></i> Save Node
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Code Validation Modal -->
+<div class="modal fade" id="validationModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-check-circle"></i> Code Validation
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="validationResult">
+                <!-- Validation results will be inserted here -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let codeMirrorEditor = null;
+    
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initialize CodeMirror and store reference
+        const codeTextarea = document.querySelector('[name="code"]');
+        if (codeTextarea) {
+            codeMirrorEditor = CodeMirror.fromTextArea(codeTextarea, {
+                mode: 'python',
+                theme: 'dracula',
+                lineNumbers: true,
+                autoCloseBrackets: true,
+                matchBrackets: true,
+                indentUnit: 4,
+                indentWithTabs: false,
+            });
+        }
+        
+        // Code validation
+        document.getElementById('validateCodeBtn').addEventListener('click', function() {
+            // Get code from CodeMirror editor or fallback to textarea
+            let code = '';
+            if (codeMirrorEditor) {
+                code = codeMirrorEditor.getValue();
+            } else {
+                const codeTextarea = document.querySelector('[name="code"]');
+                code = codeTextarea ? codeTextarea.value : '';
+            }
+            
+            if (!code.trim()) {
+                showValidationResult(false, 'Code cannot be empty');
+                return;
+            }
+            
+            // Simple client-side validation
+            const restrictedKeywords = ['import', 'exec', 'eval', 'open', 'file'];
+            const foundRestricted = restrictedKeywords.filter(keyword => code.includes(keyword));
+            
+            if (foundRestricted.length > 0) {
+                showValidationResult(false, `Restricted keywords found: ${foundRestricted.join(', ')}`);
+                return;
+            }
+            
+            // Check for basic syntax (simplified)
+            try {
+                // This is a very basic check - real validation would be server-side
+                if (code.includes('def ') && !code.includes(':')) {
+                    throw new Error('Invalid function definition syntax');
+                }
+                
+                showValidationResult(true, 'Code appears to be valid! Remember to test thoroughly.');
+            } catch (e) {
+                showValidationResult(false, `Syntax error detected: ${e.message}`);
+            }
+        });
+        
+        function showValidationResult(isValid, message) {
+            const resultDiv = document.getElementById('validationResult');
+            const alertClass = isValid ? 'alert-success' : 'alert-danger';
+            const icon = isValid ? 'fa-check-circle' : 'fa-exclamation-triangle';
+            
+            resultDiv.innerHTML = `
+                <div class="alert ${alertClass}">
+                    <i class="fas ${icon}"></i> ${message}
+                </div>
+            `;
+            
+            new bootstrap.Modal(document.getElementById('validationModal')).show();
+        }
+        
+        // Auto-update hidden fields when text fields change
+        const inputVarsField = document.querySelector('[name="input_vars_text"]');
+        const outputVarsField = document.querySelector('[name="output_vars_text"]');
+        
+        if (inputVarsField) {
+            inputVarsField.addEventListener('change', function() {
+                updateVariableField('input_variables', this.value);
+            });
+            inputVarsField.addEventListener('keyup', function() {
+                updateVariableField('input_variables', this.value);
+            });
+        }
+        
+        if (outputVarsField) {
+            outputVarsField.addEventListener('change', function() {
+                updateVariableField('output_variables', this.value);
+            });
+            outputVarsField.addEventListener('keyup', function() {
+                updateVariableField('output_variables', this.value);
+            });
+        }
+        
+        function updateVariableField(fieldName, value) {
+            const hiddenField = document.querySelector(`[name="${fieldName}"]`);
+            if (hiddenField) {
+                if (value && value.trim()) {
+                    const variables = value.split(',').map(v => v.trim()).filter(v => v);
+                    hiddenField.value = JSON.stringify(variables);
+                } else {
+                    hiddenField.value = '[]';
+                }
+            }
+        }
+        
+        // Ensure CodeMirror content and variables are saved before form submission
+        const form = document.querySelector('form');
+        if (form) {
+            form.addEventListener('submit', function(e) {
+                // Save CodeMirror content to textarea FIRST
+                if (codeMirrorEditor) {
+                    codeMirrorEditor.save();
+                }
+                
+                // Update hidden fields with current text field values
+                if (inputVarsField) {
+                    updateVariableField('input_variables', inputVarsField.value);
+                }
+                if (outputVarsField) {
+                    updateVariableField('output_variables', outputVarsField.value);
+                }
+                
+                // Validate that code is not empty after CodeMirror save
+                const codeTextarea = document.querySelector('[name="code"]');
+                if (codeTextarea && !codeTextarea.value.trim()) {
+                    e.preventDefault();
+                    alert('Please enter some Python code for this node.');
+                    return false;
+                }
+                
+                // Debug: Log form data
+                console.log('Form submission data:');
+                const formData = new FormData(form);
+                for (let [key, value] of formData.entries()) {
+                    console.log(key, ':', value);
+                }
+            });
+        }
+        
+        // Also save CodeMirror content when user switches focus
+        if (codeMirrorEditor) {
+            codeMirrorEditor.on('blur', function() {
+                codeMirrorEditor.save();
+            });
+        }
+        
+        // Auto-detect outputs functionality
+        document.getElementById('autoDetectBtn').addEventListener('click', function() {
+            const button = this;
+            const codeField = document.getElementById('{{ form.code.id_for_label }}');
+            const outputField = document.getElementById('{{ form.output_vars_text.id_for_label }}');
+            
+            // Get code from CodeMirror or textarea
+            let code = '';
+            if (codeMirrorEditor) {
+                code = codeMirrorEditor.getValue();
+            } else {
+                code = codeField.value;
+            }
+            
+            if (!code.trim()) {
+                alert('Please enter some code first to auto-detect outputs.');
+                return;
+            }
+            
+            // Disable button and show loading state
+            button.disabled = true;
+            const originalText = button.innerHTML;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Detecting...';
+            
+            // Call the detect outputs endpoint
+            fetch('{% url "detect_outputs" %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                },
+                body: JSON.stringify({
+                    code: code
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                if (data.outputs && data.outputs.length > 0) {
+                    // Update the output field with detected variables
+                    const detectedOutputs = data.outputs.join(', ');
+                    outputField.value = detectedOutputs;
+                    
+                    // Show success message
+                    const successMsg = document.createElement('div');
+                    successMsg.className = 'alert alert-success alert-dismissible fade show mt-2';
+                    successMsg.innerHTML = `
+                        <strong>Auto-detected ${data.outputs.length} output variable(s):</strong> ${detectedOutputs}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    `;
+                    button.parentNode.parentNode.appendChild(successMsg);
+                    
+                    // Auto-dismiss after 5 seconds
+                    setTimeout(() => {
+                        if (successMsg.parentNode) {
+                            successMsg.remove();
+                        }
+                    }, 5000);
+                } else {
+                    // No outputs detected
+                    const infoMsg = document.createElement('div');
+                    infoMsg.className = 'alert alert-info alert-dismissible fade show mt-2';
+                    infoMsg.innerHTML = `
+                        <strong>No output variables detected.</strong> Make sure your code assigns values to variables (e.g., df = pd.DataFrame()).
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    `;
+                    button.parentNode.parentNode.appendChild(infoMsg);
+                    
+                    setTimeout(() => {
+                        if (infoMsg.parentNode) {
+                            infoMsg.remove();
+                        }
+                    }, 5000);
+                }
+            })
+            .catch(error => {
+                console.error('Error detecting outputs:', error);
+                
+                // Show error message
+                const errorMsg = document.createElement('div');
+                errorMsg.className = 'alert alert-danger alert-dismissible fade show mt-2';
+                errorMsg.innerHTML = `
+                    <strong>Error detecting outputs:</strong> ${error.message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                `;
+                button.parentNode.parentNode.appendChild(errorMsg);
+                
+                setTimeout(() => {
+                    if (errorMsg.parentNode) {
+                        errorMsg.remove();
+                    }
+                }, 5000);
+            })
+            .finally(() => {
+                // Re-enable button
+                button.disabled = false;
+                button.innerHTML = originalText;
+            });
+        });
+    });
+</script>
+{% endblock %}

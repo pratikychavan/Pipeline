@@ -1,0 +1,851 @@
+{% extends 'core/base.html' %}
+
+{% block title %}{{ pipeline.name }} - {{ block.super }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.canvas-viewport {
+    background: linear-gradient(90deg, #f8f9fa 1px, transparent 1px), 
+                linear-gradient(#f8f9fa 1px, transparent 1px);
+    background-size: 20px 20px;
+    cursor: grab;
+}
+
+.canvas-viewport:active {
+    cursor: grabbing;
+}
+
+.pipeline-canvas {
+    transition: transform 0.2s ease;
+}
+
+.zoom-controls .btn {
+    border-radius: 0;
+}
+
+.zoom-controls .btn:first-child {
+    border-top-left-radius: 0.25rem;
+    border-bottom-left-radius: 0.25rem;
+}
+
+.zoom-controls .btn:last-child {
+    border-top-right-radius: 0.25rem;
+    border-bottom-right-radius: 0.25rem;
+}
+
+/* Prevent text selection during drag */
+.pipeline-canvas * {
+    user-select: none;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2>
+                <i class="fas fa-project-diagram"></i> {{ pipeline.name }}
+            </h2>
+            <p class="text-muted mb-0">{{ pipeline.description|default:"No description provided" }}</p>
+        </div>
+        <div class="btn-toolbar">
+            <a href="{% url 'node_create' pipeline.pk %}" class="btn btn-primary">
+                <i class="fas fa-plus"></i> Add Node
+            </a>
+            <a href="{% url 'pipeline_update' pipeline.pk %}" class="btn btn-outline-secondary">
+                <i class="fas fa-edit"></i> Edit
+            </a>
+            <a href="{% url 'pipeline_executions' pipeline.pk %}" class="btn btn-outline-info">
+                <i class="fas fa-history"></i> History
+            </a>
+            <a href="{% url 'pipeline_delete' pipeline.pk %}" class="btn btn-outline-danger">
+                <i class="fas fa-trash"></i> Delete
+            </a>
+            <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#executeModal">
+                <i class="fas fa-play"></i> Execute
+            </button>
+        </div>
+    </div>
+
+    <!-- Pipeline Canvas -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="fas fa-sitemap"></i> Workflow Canvas
+                        <small class="text-muted">({{ nodes|length }} node{{ nodes|length|pluralize }})</small>
+                    </h5>
+                    <div class="zoom-controls">
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="zoomOut" title="Zoom Out">
+                            <i class="fas fa-minus"></i>
+                        </button>
+                        <span id="zoomLevel" class="mx-2 small">100%</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="zoomIn" title="Zoom In">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="zoomReset" title="Reset Zoom">
+                            <i class="fas fa-expand-arrows-alt"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="canvas-viewport" style="min-height: 500px; max-height: 600px; overflow: auto; position: relative;">
+                        <div class="pipeline-canvas" id="pipelineCanvas" style="min-height: 1000px; min-width: 1500px; position: relative; transform-origin: 0 0;">
+                            <!-- SVG layer for connections -->
+                            <svg id="connectionsSvg" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1;">
+                            </svg>
+                        {% for node in nodes %}
+                            <div class="node status-{{ node.status }}" 
+                                 id="node-{{ node.pk }}"
+                                 style="left: {{ node.position_x|default:'100' }}px; top: {{ node.position_y|default:'100' }}px;"
+                                 data-node-id="{{ node.pk }}">
+                                <div class="node-header" style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div>
+                                        <div class="node-title">{{ node.name }}</div>
+                                        <div class="node-status status-{{ node.status }}">
+                                            {{ node.get_status_display }}
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-sm btn-link collapse-btn" 
+                                            onclick="toggleNodeCollapse('{{ node.pk }}')" 
+                                            title="Collapse/Expand">
+                                        <i class="fas fa-chevron-up"></i>
+                                    </button>
+                                </div>
+                                <!-- Collapsed view - minimal variable display -->
+                                <div class="node-collapsed-vars" id="collapsed-{{ node.pk }}" style="display: none;">
+                                    {% if node.input_variables %}
+                                        {% for var in node.input_variables %}
+                                            <span class="badge badge-light input-var collapsed-var" data-var="{{ var }}" title="Input: {{ var }}">{{ var }}</span>
+                                        {% endfor %}
+                                    {% endif %}
+                                    {% if node.output_variables %}
+                                        {% for var in node.output_variables %}
+                                            <span class="badge badge-light output-var collapsed-var" data-var="{{ var }}" title="Output: {{ var }}">{{ var }}</span>
+                                        {% endfor %}
+                                    {% endif %}
+                                </div>
+                                <div class="node-content" id="content-{{ node.pk }}">
+                                    <div class="mt-2">
+                                        <small class="text-dark">
+                                            {% if node.input_variables %}
+                                                <div class="mb-1"><i class="fas fa-arrow-right text-success"></i> Inputs:</div>
+                                                <div class="mb-2">
+                                                    {% for var in node.input_variables %}
+                                                        <div class="mb-1">
+                                                            <span class="badge badge-light input-var" data-var="{{ var }}" style="color: #000;">{{ var }}</span>
+                                                        </div>
+                                                    {% endfor %}
+                                                </div>
+                                            {% endif %}
+                                            {% if node.output_variables %}
+                                                <div class="mb-1"><i class="fas fa-arrow-left text-primary"></i> Outputs:</div>
+                                                <div>
+                                                    {% for var in node.output_variables %}
+                                                        <div class="mb-1">
+                                                            <span class="badge badge-light output-var" data-var="{{ var }}" style="color: #000;">{{ var }}</span>
+                                                        </div>
+                                                    {% endfor %}
+                                                </div>
+                                            {% endif %}
+                                        </small>
+                                    </div>
+                                    <div class="mt-2">
+                                        <div class="btn-group btn-group-sm">
+                                            <a href="{% url 'node_edit' node.pk %}" class="btn btn-outline-primary btn-sm" title="Edit Node">
+                                                <i class="fas fa-edit"></i>
+                                            </a>
+                                            <button class="btn btn-outline-info btn-sm" onclick="showNodeCode('{{ node.pk }}')" title="View Code">
+                                                <i class="fas fa-code"></i>
+                                            </button>
+                                            <form method="post" action="{% url 'node_delete' node.pk %}" class="d-inline" 
+                                                  onsubmit="return confirm('Are you sure you want to delete this node?')">
+                                                {% csrf_token %}
+                                                <button type="submit" class="btn btn-outline-danger btn-sm" title="Delete Node">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div> <!-- End node-content -->
+                            </div>
+                        {% empty %}
+                            <div class="text-center py-5">
+                                <i class="fas fa-plus-circle fa-3x text-muted mb-3"></i>
+                                <h5 class="text-muted">No Nodes Yet</h5>
+                                <p class="text-muted">Add your first node to start building the workflow.</p>
+                                <a href="{% url 'node_create' pipeline.pk %}" class="btn btn-primary">
+                                    <i class="fas fa-plus"></i> Add First Node
+                                </a>
+                            </div>
+                        {% endfor %}
+                        </div> <!-- End pipeline-canvas -->
+                    </div> <!-- End canvas-viewport -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pipeline Info -->
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="fas fa-info-circle"></i> Pipeline Information</h6>
+                </div>
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tr>
+                            <th>Created:</th>
+                            <td>{{ pipeline.created_at|date:"M d, Y H:i" }}</td>
+                        </tr>
+                        <tr>
+                            <th>Last Modified:</th>
+                            <td>{{ pipeline.updated_at|date:"M d, Y H:i" }}</td>
+                        </tr>
+                        <tr>
+                            <th>Owner:</th>
+                            <td>{{ pipeline.created_by.username }}</td>
+                        </tr>
+                        <tr>
+                            <th>Total Nodes:</th>
+                            <td>{{ nodes|length }}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="fas fa-history"></i> Recent Executions</h6>
+                </div>
+                <div class="card-body">
+                    {% if pipeline.executions.all|slice:":5" %}
+                        <div class="list-group list-group-flush">
+                            {% for execution in pipeline.executions.all|slice:":5" %}
+                                <div class="list-group-item px-0">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }}">
+                                            {{ execution.get_status_display }}
+                                        </span>
+                                        <small class="text-muted">{{ execution.started_at|timesince }} ago</small>
+                                    </div>
+                                    <a href="{% url 'execution_detail' execution.pk %}" class="text-decoration-none small">
+                                        View details →
+                                    </a>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p class="text-muted mb-0">No executions yet</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Execute Pipeline Modal -->
+<div class="modal fade" id="executeModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{% url 'execute_pipeline' pipeline.pk %}">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-play"></i> Execute Pipeline: {{ pipeline.name }}
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    {% if pipeline_input_variables %}
+                        <h6>Pipeline Input Variables:</h6>
+                        {% for var_name in pipeline_input_variables %}
+                            <div class="mb-3">
+                                <label for="input_{{ var_name }}" class="form-label">{{ var_name }}</label>
+                                <input type="text" 
+                                       class="form-control" 
+                                       id="input_{{ var_name }}" 
+                                       name="input_{{ var_name }}"
+                                       placeholder="Enter value for {{ var_name }}"
+                                       required>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle"></i>
+                            This pipeline has no input variables. Click Execute to run it directly.
+                        </div>
+                    {% endif %}
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">
+                        <i class="fas fa-play"></i> Execute
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- View Node Code Modal -->
+<div class="modal fade" id="nodeCodeModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="nodeCodeTitle">
+                    <i class="fas fa-code"></i> Node Code
+                </h5>
+                <div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary me-2" onclick="copyNodeCode()" title="Copy Code">
+                        <i class="fas fa-copy"></i> Copy
+                    </button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+            </div>
+            <div class="modal-body p-0">
+                <pre id="nodeCodeContent" class="bg-dark text-light p-3 m-0" style="max-height: 500px; overflow-y: auto; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 0.9em;"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+{{ connections_data|json_script:"connections-data" }}
+<script>
+    const connectionsData = JSON.parse(document.getElementById('connections-data').textContent);
+    console.log('SCRIPT LOADING...', 'Connections:', connectionsData);
+    
+    function showNodeCode(nodeId) {
+        // Fetch node code from server
+        fetch(`/nodes/${nodeId}/code/`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update modal content
+                    document.getElementById('nodeCodeTitle').textContent = `Node Code: ${data.node_name}`;
+                    
+                    // Format the code content with metadata
+                    let codeContent = '';
+                    if (data.description && data.description !== 'No description provided') {
+                        codeContent += `# Description: ${data.description}\n\n`;
+                    }
+                    
+                    if (data.input_variables && data.input_variables.length > 0) {
+                        codeContent += `# Input Variables: ${data.input_variables.join(', ')}\n`;
+                    }
+                    
+                    if (data.output_variables && data.output_variables.length > 0) {
+                        codeContent += `# Output Variables: ${data.output_variables.join(', ')}\n`;
+                    }
+                    
+                    if ((data.input_variables && data.input_variables.length > 0) || 
+                        (data.output_variables && data.output_variables.length > 0)) {
+                        codeContent += '\n';
+                    }
+                    
+                    codeContent += data.code;
+                    
+                    document.getElementById('nodeCodeContent').textContent = codeContent;
+                    
+                    // Show the modal
+                    const modal = new bootstrap.Modal(document.getElementById('nodeCodeModal'));
+                    modal.show();
+                } else {
+                    alert('Error loading node code: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching node code:', error);
+                alert('Error loading node code');
+            });
+    }
+
+    // Auto-refresh pipeline status 
+    function refreshPipelineStatus() {
+        fetch('{% url "pipeline_status" pipeline.pk %}')
+            .then(response => response.json())
+            .then(data => {
+                Object.entries(data.node_statuses || {}).forEach(([nodeId, status]) => {
+                    const nodeElement = document.getElementById('node-' + nodeId);
+                    if (nodeElement) {
+                        nodeElement.className = nodeElement.className.replace(/status-\w+/, 'status-' + status.status);
+                        const statusElement = nodeElement.querySelector('.node-status');
+                        if (statusElement) {
+                            statusElement.textContent = status.status.charAt(0).toUpperCase() + status.status.slice(1);
+                            statusElement.className = statusElement.className.replace(/status-\w+/, 'status-' + status.status);
+                        }
+                    }
+                });
+                
+                if (data.execution_status === 'running') {
+                    setTimeout(refreshPipelineStatus, 2000);
+                }
+            })
+            .catch(error => console.error('Error refreshing status:', error));
+    }
+
+    // SIMPLE DRAG SYSTEM
+    let dragState = {
+        isDragging: false,
+        element: null,
+        startX: 0,
+        startY: 0,
+        startLeft: 0,
+        startTop: 0
+    };
+
+    // Debounced draw connections function
+    let drawConnectionsTimeout;
+    function drawConnectionsDebounced() {
+        clearTimeout(drawConnectionsTimeout);
+        drawConnectionsTimeout = setTimeout(drawConnections, 50);
+    }
+    
+    // Function to draw connections between nodes
+    function drawConnections() {
+        const svg = document.getElementById('connectionsSvg');
+        if (!svg) return;
+        
+        // Clear existing connections
+        svg.innerHTML = '';
+        
+        if (!connectionsData || connectionsData.length === 0) {
+            return; // No connections to draw
+        }
+        
+        // Convert database connections to drawable connections
+        const connections = [];
+        connectionsData.forEach(dbConn => {
+            const fromNode = document.getElementById('node-' + dbConn.from_node);
+            const toNode = document.getElementById('node-' + dbConn.to_node);
+            
+            if (fromNode && toNode) {
+                // Find the specific variable badges (check both expanded and collapsed views)
+                let fromBadge = Array.from(fromNode.querySelectorAll('.output-var'))
+                    .find(badge => badge.dataset.var === dbConn.from_output && 
+                          badge.offsetParent !== null); // Only visible badges
+                let toBadge = Array.from(toNode.querySelectorAll('.input-var'))
+                    .find(badge => badge.dataset.var === dbConn.to_input && 
+                          badge.offsetParent !== null); // Only visible badges
+                
+                if (fromBadge && toBadge) {
+                    connections.push({
+                        source: fromBadge,
+                        target: toBadge,
+                        variables: [dbConn.from_output + ' → ' + dbConn.to_input]
+                    });
+                }
+            }
+        });
+        
+        // Draw connections using stored node positions (zoom-independent)
+        connections.forEach(conn => {
+            const currentZoom = getCurrentZoomLevel();
+            
+            // Get node elements to extract their stored positions
+            const sourceNode = conn.source.closest('.node');
+            const targetNode = conn.target.closest('.node');
+            
+            if (!sourceNode || !targetNode) {
+                console.warn('Could not find parent nodes for badges');
+                return;
+            }
+            
+            // Extract stored positions from node styles (these are zoom-independent)
+            const sourceNodeX = parseInt(sourceNode.style.left) || 0;
+            const sourceNodeY = parseInt(sourceNode.style.top) || 0;
+            const targetNodeX = parseInt(targetNode.style.left) || 0;
+            const targetNodeY = parseInt(targetNode.style.top) || 0;
+            
+            // Get badge positions relative to their nodes
+            const sourceBadgeRect = conn.source.getBoundingClientRect();
+            const targetBadgeRect = conn.target.getBoundingClientRect();
+            const sourceNodeRect = sourceNode.getBoundingClientRect();
+            const targetNodeRect = targetNode.getBoundingClientRect();
+            
+            // Calculate badge offsets within their nodes (these are consistent regardless of zoom)
+            const sourceBadgeOffsetX = (sourceBadgeRect.right - sourceNodeRect.left) / currentZoom;
+            const sourceBadgeOffsetY = (sourceBadgeRect.top - sourceNodeRect.top + sourceBadgeRect.height / 2) / currentZoom;
+            const targetBadgeOffsetX = (targetBadgeRect.left - targetNodeRect.left) / currentZoom;
+            const targetBadgeOffsetY = (targetBadgeRect.top - targetNodeRect.top + targetBadgeRect.height / 2) / currentZoom;
+            
+            // Calculate final positions using stored node positions + badge offsets
+            const sourceX = sourceNodeX + sourceBadgeOffsetX;
+            const sourceY = sourceNodeY + sourceBadgeOffsetY;
+            const targetX = targetNodeX + targetBadgeOffsetX;
+            const targetY = targetNodeY + targetBadgeOffsetY;
+            
+            // Debug logging
+            console.log(`Connection: zoom=${currentZoom}, stable coords: source=(${sourceX},${sourceY}), target=(${targetX},${targetY})`);
+            
+            // Create curved line
+            const midX = (sourceX + targetX) / 2;
+            const curve = Math.abs(targetX - sourceX) * 0.3;
+            
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            const pathData = `M ${sourceX} ${sourceY} C ${midX + curve} ${sourceY} ${midX - curve} ${targetY} ${targetX} ${targetY}`;
+            
+            path.setAttribute('d', pathData);
+            path.setAttribute('stroke', '#007bff');
+            path.setAttribute('stroke-width', '2'); // Fixed stroke width
+            path.setAttribute('fill', 'none');
+            path.setAttribute('marker-end', 'url(#arrowhead)');
+            
+            // Add connection info as title
+            path.innerHTML = `<title>Variables: ${conn.variables.join(', ')}</title>`;
+            
+            svg.appendChild(path);
+        });
+        
+        // Add arrow marker definition (recreate to handle zoom changes)
+        if (connections.length > 0) {
+            // Remove existing marker if present
+            const existingDefs = svg.querySelector('defs');
+            if (existingDefs) {
+                existingDefs.remove();
+            }
+            
+            const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+            const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+            const markerSize = 10; // Fixed marker size
+            
+            marker.setAttribute('id', 'arrowhead');
+            marker.setAttribute('markerWidth', markerSize);
+            marker.setAttribute('markerHeight', markerSize * 0.7);
+            marker.setAttribute('refX', markerSize * 0.9);
+            marker.setAttribute('refY', markerSize * 0.35);
+            marker.setAttribute('orient', 'auto');
+            marker.setAttribute('markerUnits', 'userSpaceOnUse');
+            
+            const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+            polygon.setAttribute('points', `0 0, ${markerSize} ${markerSize * 0.35}, 0 ${markerSize * 0.7}`);
+            polygon.setAttribute('fill', '#007bff');
+            
+            marker.appendChild(polygon);
+            defs.appendChild(marker);
+            svg.appendChild(defs);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('DOM LOADED - Initializing...');
+        
+        refreshPipelineStatus();
+        
+        setTimeout(function() {
+            const nodes = document.querySelectorAll('.node');
+            console.log('Nodes found:', nodes.length);
+            
+            if (nodes.length === 0) {
+                return;
+            }
+            
+            nodes.forEach((node) => {
+                // Add drag handle
+                const handle = document.createElement('div');
+                handle.innerHTML = '⚏';
+                handle.style.cssText = 'position:absolute;top:-5px;right:-5px;width:16px;height:16px;background:#007bff;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;cursor:move;z-index:2;';
+                node.appendChild(handle);
+                
+                node.addEventListener('mousedown', function(e) {
+                    // Don't start dragging if clicking on buttons, links, forms, or variable badges
+                    if (e.target.closest('button') || e.target.closest('a') || e.target.closest('form') || 
+                        e.target.classList.contains('input-var') || e.target.classList.contains('output-var')) {
+                        return;
+                    }
+                    
+                    dragState.isDragging = true;
+                    dragState.element = node;
+                    dragState.startX = e.clientX;
+                    dragState.startY = e.clientY;
+                    dragState.startLeft = parseInt(node.style.left) || 0;
+                    dragState.startTop = parseInt(node.style.top) || 0;
+                    
+                    node.style.border = '2px solid red';
+                    node.style.zIndex = '1000';
+                    
+                    e.preventDefault();
+                });
+            });
+            
+            // Add connection functionality
+            let connectionState = { fromNode: null, fromVar: null, fromType: null };
+            
+            // Handle variable badge clicks for connections
+            document.querySelectorAll('.input-var, .output-var').forEach(badge => {
+                badge.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    
+                    const nodeElement = this.closest('.node');
+                    const nodeId = nodeElement.id.replace('node-', '');
+                    const varName = this.dataset.var;
+                    const isOutput = this.classList.contains('output-var');
+                    
+                    if (!connectionState.fromNode) {
+                        // First click - select source
+                        if (isOutput) {
+                            connectionState.fromNode = nodeId;
+                            connectionState.fromVar = varName;
+                            connectionState.fromType = 'output';
+                            this.style.backgroundColor = '#ffc107';
+                            this.style.color = '#000';
+                        } else {
+                            alert('Please select an output variable first, then an input variable.');
+                        }
+                    } else {
+                        // Second click - create connection
+                        if (!isOutput && connectionState.fromType === 'output') {
+                            // Valid connection: output -> input
+                            createConnection(connectionState.fromNode, connectionState.fromVar, nodeId, varName);
+                        } else {
+                            alert('Invalid connection. Select output variable first, then input variable.');
+                        }
+                        
+                        // Reset connection state
+                        document.querySelectorAll('.input-var, .output-var').forEach(b => {
+                            b.style.backgroundColor = '';
+                            b.style.color = '';
+                        });
+                        connectionState = { fromNode: null, fromVar: null, fromType: null };
+                    }
+                });
+            });
+            
+            // Draw initial connections
+            drawConnections();
+            
+        }, 200);
+    });
+    
+    // Zoom functionality
+    let zoomLevel = 1;
+    const minZoom = 0.25;
+    const maxZoom = 2;
+    const zoomStep = 0.25;
+    
+    function getCurrentZoomLevel() {
+        return zoomLevel;
+    }
+    
+    function updateZoom() {
+        const canvas = document.getElementById('pipelineCanvas');
+        const svg = document.getElementById('connectionsSvg');
+        
+        canvas.style.transform = `scale(${zoomLevel})`;
+        document.getElementById('zoomLevel').textContent = Math.round(zoomLevel * 100) + '%';
+        
+        // Update canvas size - when zoomed out, canvas needs to be larger to fill viewport
+        const baseWidth = 1500;
+        const baseHeight = 1000;
+        const scaledWidth = baseWidth / zoomLevel;
+        const scaledHeight = baseHeight / zoomLevel;
+        
+        canvas.style.minWidth = Math.max(baseWidth, scaledWidth) + 'px';
+        canvas.style.minHeight = Math.max(baseHeight, scaledHeight) + 'px';
+        
+        // Update SVG to match canvas size
+        if (svg) {
+            svg.style.width = canvas.style.minWidth;
+            svg.style.height = canvas.style.minHeight;
+        }
+        
+        // Redraw connections after zoom with delay for DOM updates
+        setTimeout(drawConnections, 100);
+    }
+    
+    document.getElementById('zoomIn').addEventListener('click', function() {
+        if (zoomLevel < maxZoom) {
+            zoomLevel = Math.min(zoomLevel + zoomStep, maxZoom);
+            updateZoom();
+        }
+    });
+    
+    document.getElementById('zoomOut').addEventListener('click', function() {
+        if (zoomLevel > minZoom) {
+            zoomLevel = Math.max(zoomLevel - zoomStep, minZoom);
+            updateZoom();
+        }
+    });
+    
+    document.getElementById('zoomReset').addEventListener('click', function() {
+        zoomLevel = 1;
+        updateZoom();
+    });
+    
+    // Mouse wheel zoom
+    document.querySelector('.canvas-viewport').addEventListener('wheel', function(e) {
+        if (e.ctrlKey) {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? -zoomStep : zoomStep;
+            const newZoom = Math.max(minZoom, Math.min(maxZoom, zoomLevel + delta));
+            if (newZoom !== zoomLevel) {
+                zoomLevel = newZoom;
+                updateZoom();
+            }
+        }
+    });
+    
+    document.addEventListener('mousemove', function(e) {
+        if (!dragState.isDragging) return;
+        
+        const deltaX = e.clientX - dragState.startX;
+        const deltaY = e.clientY - dragState.startY;
+        
+        // Calculate new position
+        let newLeft = dragState.startLeft + deltaX;
+        let newTop = dragState.startTop + deltaY;
+        
+        // Get canvas and node dimensions
+        const canvas = document.getElementById('pipelineCanvas');
+        const canvasRect = canvas.getBoundingClientRect();
+        const nodeRect = dragState.element.getBoundingClientRect();
+        
+        // Apply boundaries (account for zoom)
+        const minX = 10;
+        const minY = 10;
+        const maxX = (canvasRect.width / zoomLevel) - (nodeRect.width / zoomLevel) - 10;
+        const maxY = (canvasRect.height / zoomLevel) - (nodeRect.height / zoomLevel) - 10;
+        
+        // Constrain to boundaries
+        newLeft = Math.max(minX, Math.min(maxX, newLeft));
+        newTop = Math.max(minY, Math.min(maxY, newTop));
+        
+        dragState.element.style.left = newLeft + 'px';
+        dragState.element.style.top = newTop + 'px';
+        
+        // Redraw connections while dragging (debounced for performance)
+        drawConnectionsDebounced();
+    });
+    
+    document.addEventListener('mouseup', function(e) {
+        if (!dragState.isDragging) return;
+        
+        const node = dragState.element;
+        node.style.border = '';
+        node.style.zIndex = '';
+        
+        dragState.isDragging = false;
+        dragState.element = null;
+        
+        // Redraw connections after drag
+        drawConnections();
+        
+        // Save position
+        const nodeId = node.dataset.nodeId;
+        const finalX = parseInt(node.style.left) || 0;
+        const finalY = parseInt(node.style.top) || 0;
+        
+        fetch('{% url "update_node_position" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken(),
+            },
+            body: JSON.stringify({
+                node_id: nodeId,
+                x: finalX,
+                y: finalY
+            })
+        });
+    });
+    
+    // Function to create connection via AJAX
+    function createConnection(fromNodeId, outputVar, toNodeId, inputVar) {
+        fetch('{% url "create_connection" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken(),
+            },
+            body: JSON.stringify({
+                from_node_id: fromNodeId,
+                output_variable: outputVar,
+                to_node_id: toNodeId,
+                input_variable: inputVar
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                console.log('Connection created successfully');
+                drawConnections(); // Redraw connections
+                // Refresh the page to update the input variables in the execute modal
+                setTimeout(() => window.location.reload(), 500);
+            } else {
+                alert('Error creating connection: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error creating connection');
+        });
+    }
+    
+    // Function to copy node code to clipboard
+    function copyNodeCode() {
+        const codeContent = document.getElementById('nodeCodeContent').textContent;
+        navigator.clipboard.writeText(codeContent).then(function() {
+            // Show temporary success feedback
+            const copyBtn = document.querySelector('#nodeCodeModal .btn-outline-secondary');
+            const originalContent = copyBtn.innerHTML;
+            copyBtn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+            copyBtn.classList.remove('btn-outline-secondary');
+            copyBtn.classList.add('btn-success');
+            
+            setTimeout(() => {
+                copyBtn.innerHTML = originalContent;
+                copyBtn.classList.remove('btn-success');
+                copyBtn.classList.add('btn-outline-secondary');
+            }, 2000);
+        }).catch(function() {
+            alert('Failed to copy code to clipboard');
+        });
+    }
+    
+    // Function to toggle node collapse/expand
+    function toggleNodeCollapse(nodeId) {
+        const content = document.getElementById('content-' + nodeId);
+        const collapsedVars = document.getElementById('collapsed-' + nodeId);
+        const button = document.querySelector('#node-' + nodeId + ' .collapse-btn i');
+        const node = document.getElementById('node-' + nodeId);
+        
+        if (content.style.display === 'none') {
+            // Expand
+            content.style.display = 'block';
+            collapsedVars.style.display = 'none';
+            button.className = 'fas fa-chevron-up';
+            node.classList.remove('collapsed');
+        } else {
+            // Collapse
+            content.style.display = 'none';
+            collapsedVars.style.display = 'block';
+            button.className = 'fas fa-chevron-down';
+            node.classList.add('collapsed');
+        }
+        
+        // Force reflow and redraw connections after DOM updates
+        requestAnimationFrame(() => {
+            setTimeout(drawConnections, 100);
+        });
+    }
+    
+    // Add double-click to toggle collapse (alternative method)
+    document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('.node-header').forEach(header => {
+            header.addEventListener('dblclick', function() {
+                const nodeId = this.closest('.node').dataset.nodeId;
+                toggleNodeCollapse(nodeId);
+            });
+        });
+    });
+
+</script>
+{% endblock %}

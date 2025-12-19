@@ -1,0 +1,158 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Execution History - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2><i class="fas fa-history"></i> Execution History</h2>
+        <a href="{% url 'pipeline_list' %}" class="btn btn-primary">
+            <i class="fas fa-project-diagram"></i> View Pipelines
+        </a>
+    </div>
+    
+    {% if executions %}
+        <div class="card">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Pipeline</th>
+                                <th>Status</th>
+                                <th>Started</th>
+                                <th>Duration</th>
+                                <th>Started By</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for execution in executions %}
+                                <tr>
+                                    <td>
+                                        <strong>{{ execution.pipeline.name }}</strong>
+                                        {% if execution.pipeline.description %}
+                                            <br><small class="text-muted">{{ execution.pipeline.description|truncatechars:50 }}</small>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }}">
+                                            {{ execution.get_status_display }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        {{ execution.started_at|date:"M d, Y" }}<br>
+                                        <small class="text-muted">{{ execution.started_at|time:"H:i:s" }}</small>
+                                    </td>
+                                    <td>
+                                        {% if execution.completed_at %}
+                                            {{ execution.completed_at|timeuntil:execution.started_at }}
+                                        {% elif execution.status == 'running' %}
+                                            <span class="text-warning">
+                                                <i class="fas fa-spinner fa-spin"></i> Running...
+                                            </span>
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ execution.started_by.username }}</td>
+                                    <td>
+                                        <div class="btn-group btn-group-sm">
+                                            <a href="{% url 'execution_detail' execution.pk %}" 
+                                               class="btn btn-outline-primary" title="View Details">
+                                                <i class="fas fa-eye"></i>
+                                            </a>
+                                            <a href="{% url 'pipeline_detail' execution.pipeline.pk %}" 
+                                               class="btn btn-outline-secondary" title="View Pipeline">
+                                                <i class="fas fa-project-diagram"></i>
+                                            </a>
+                                            {% if execution.status == 'completed' %}
+                                                <form method="post" action="{% url 'execute_pipeline' execution.pipeline.pk %}" class="d-inline">
+                                                    {% csrf_token %}
+                                                    <button type="submit" class="btn btn-outline-success btn-sm" title="Re-run Pipeline">
+                                                        <i class="fas fa-redo"></i>
+                                                    </button>
+                                                </form>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Execution Statistics -->
+        <div class="row mt-4">
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title text-success">
+                            {{ executions|length }}
+                        </h5>
+                        <p class="card-text">Total Executions</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title text-success">
+                            {% with completed=executions|length %}
+                                {{ completed }}
+                            {% endwith %}
+                        </h5>
+                        <p class="card-text">Completed</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title text-warning">
+                            0
+                        </h5>
+                        <p class="card-text">Running</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title text-danger">
+                            0
+                        </h5>
+                        <p class="card-text">Failed</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+    {% else %}
+        <div class="text-center py-5">
+            <i class="fas fa-history fa-4x text-muted mb-4"></i>
+            <h4 class="text-muted">No Executions Yet</h4>
+            <p class="text-muted">Execute a pipeline to see execution history here.</p>
+            <a href="{% url 'pipeline_list' %}" class="btn btn-primary">
+                <i class="fas fa-project-diagram"></i> View Pipelines
+            </a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Auto-refresh page if there are running executions
+    document.addEventListener('DOMContentLoaded', function() {
+        const runningExecutions = document.querySelectorAll('.text-warning .fa-spinner');
+        if (runningExecutions.length > 0) {
+            setTimeout(function() {
+                location.reload();
+            }, 10000); // Refresh every 10 seconds
+        }
+    });
+</script>
+{% endblock %}
