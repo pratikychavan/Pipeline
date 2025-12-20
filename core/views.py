@@ -43,7 +43,27 @@ class PipelineCreateView(LoginRequiredMixin, CreateView):
     
     def form_valid(self, form):
         form.instance.created_by = self.request.user
-        return super().form_valid(form)
+        response = super().form_valid(form)
+        
+        # Return JSON response for AJAX requests
+        if self.request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({
+                'success': True,
+                'pipeline_id': str(self.object.pk),
+                'pipeline_name': self.object.name
+            })
+        
+        return response
+    
+    def form_invalid(self, form):
+        # Return JSON response for AJAX requests
+        if self.request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({
+                'success': False,
+                'errors': form.errors
+            })
+        
+        return super().form_invalid(form)
 
 class PipelineUpdateView(LoginRequiredMixin, UpdateView):
     model = Pipeline
@@ -55,6 +75,29 @@ class PipelineUpdateView(LoginRequiredMixin, UpdateView):
     
     def get_success_url(self):
         return reverse('pipeline_detail', kwargs={'pk': self.object.pk})
+    
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        
+        # Return JSON response for AJAX requests
+        if self.request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({
+                'success': True,
+                'pipeline_id': str(self.object.pk),
+                'pipeline_name': self.object.name
+            })
+        
+        return response
+    
+    def form_invalid(self, form):
+        # Return JSON response for AJAX requests
+        if self.request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({
+                'success': False,
+                'errors': form.errors
+            })
+        
+        return super().form_invalid(form)
 
 class PipelineDeleteView(LoginRequiredMixin, DeleteView):
     model = Pipeline
@@ -84,6 +127,11 @@ def pipeline_detail(request, pk):
     all_input_vars = set()
     connected_inputs = set()
     
+    # Add pipeline-level arguments to input variables
+    if pipeline.global_arguments:
+        for arg_name in pipeline.global_arguments:
+            all_input_vars.add(arg_name)
+    
     # First, find all input variables that are satisfied by connections
     for connection in connections:
         connected_inputs.add((connection.to_node.id, connection.to_input))
@@ -96,16 +144,22 @@ def pipeline_detail(request, pk):
                 if (node.id, input_var) not in connected_inputs:
                     all_input_vars.add(input_var)
     
-    # Serialize connections for JavaScript
+    # Generate connections from input_variable_mappings (new system)
     connections_data = []
-    for conn in connections:
-        connections_data.append({
-            'id': str(conn.id),
-            'from_node': str(conn.from_node.id),
-            'to_node': str(conn.to_node.id),
-            'from_output': conn.from_output,
-            'to_input': conn.to_input,
-        })
+    for node in nodes:
+        if node.input_variable_mappings:
+            for target_var, mapping in node.input_variable_mappings.items():
+                source_node_id = mapping.get('node_id')
+                source_var = mapping.get('source_variable')
+                
+                # Only create visual connections for node-to-node mappings (not pipeline-level args)
+                if source_node_id and source_node_id != '__pipeline__' and source_var:
+                    connections_data.append({
+                        'from_node': source_node_id,
+                        'to_node': str(node.id),
+                        'from_output': source_var,
+                        'to_input': target_var,
+                    })
     
     context = {
         'pipeline': pipeline,
@@ -113,6 +167,7 @@ def pipeline_detail(request, pk):
         'connections': connections,
         'connections_data': connections_data,
         'pipeline_input_variables': sorted(list(all_input_vars)),
+        'pipeline_global_arguments_json': json.dumps(pipeline.global_arguments or []),
     }
     return render(request, 'core/pipeline_detail.html', context)
 
@@ -121,7 +176,7 @@ def node_create(request, pipeline_pk):
     pipeline = get_object_or_404(Pipeline, pk=pipeline_pk, created_by=request.user)
     
     if request.method == 'POST':
-        form = NodeForm(request.POST)
+        form = NodeForm(request.POST, pipeline=pipeline)
         if form.is_valid():
             node = form.save(commit=False)
             node.pipeline = pipeline
@@ -131,15 +186,31 @@ def node_create(request, pipeline_pk):
             )['order__max'] or 0
             node.order = max_order + 1
             node.save()
+            
+            # Return JSON response for AJAX requests
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return JsonResponse({
+                    'success': True,
+                    'node_id': str(node.pk),
+                    'node_name': node.name
+                })
+            
             messages.success(request, f'Node "{node.name}" created successfully!')
             return redirect('pipeline_detail', pk=pipeline.pk)
         else:
+            # Return JSON response for AJAX requests
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return JsonResponse({
+                    'success': False,
+                    'errors': form.errors
+                })
+            
             # Add form errors to messages for debugging
             for field, errors in form.errors.items():
                 for error in errors:
                     messages.error(request, f'{field}: {error}')
     else:
-        form = NodeForm()
+        form = NodeForm(pipeline=pipeline)
     
     context = {
         'form': form,
@@ -153,18 +224,34 @@ def node_edit(request, pk):
     node = get_object_or_404(Node, pk=pk, pipeline__created_by=request.user)
     
     if request.method == 'POST':
-        form = NodeForm(request.POST, instance=node)
+        form = NodeForm(request.POST, instance=node, pipeline=node.pipeline)
         if form.is_valid():
             form.save()
+            
+            # Return JSON response for AJAX requests
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return JsonResponse({
+                    'success': True,
+                    'node_id': str(node.pk),
+                    'node_name': node.name
+                })
+            
             messages.success(request, f'Node "{node.name}" updated successfully!')
             return redirect('pipeline_detail', pk=node.pipeline.pk)
         else:
+            # Return JSON response for AJAX requests
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return JsonResponse({
+                    'success': False,
+                    'errors': form.errors
+                })
+            
             # Add form errors to messages for debugging
             for field, errors in form.errors.items():
                 for error in errors:
                     messages.error(request, f'{field}: {error}')
     else:
-        form = NodeForm(instance=node)
+        form = NodeForm(instance=node, pipeline=node.pipeline)
     
     context = {
         'form': form,
@@ -238,34 +325,42 @@ def execute_pipeline_async(execution_id):
         pipeline = execution.pipeline
         nodes = Node.objects.filter(pipeline=pipeline).order_by('order')
         
-        # Initialize execution context with initial data
+        # Initialize execution context with initial data (includes pipeline argument values)
         context = execution.context_data.copy()
         
-        # Get all connections for this pipeline to handle variable mapping
-        connections = NodeConnection.objects.filter(from_node__pipeline=pipeline)
-        
         for node in nodes:
-            # Build node-specific context by mapping connected variables
+            # Build node-specific context using the new input_variable_mappings
             node_context = context.copy()
             
-            # Add connected inputs from previous nodes
-            for connection in connections:
-                if connection.to_node == node:
-                    # Map output variable from source node to input variable for this node
-                    source_var = connection.from_output
-                    target_var = connection.to_input
+            # Handle input variable mappings from the node's configuration
+            if node.input_variable_mappings:
+                for var_name, mapping in node.input_variable_mappings.items():
+                    source_node_id = mapping.get('node_id')
+                    source_var = mapping.get('source_variable')
                     
-                    if source_var in context:
-                        # Map the variable with the correct name for this node
-                        node_context[target_var] = context[source_var]
-                        print(f"Mapping variable: {source_var} -> {target_var} for node {node.name}")
-                    else:
-                        print(f"Warning: Source variable '{source_var}' not found in context for node {node.name}")
+                    if source_node_id and source_var:
+                        # Special handling for pipeline-level arguments
+                        if source_node_id == '__pipeline__':
+                            # Map directly from context (argument values provided at execution time)
+                            if source_var in context:
+                                node_context[var_name] = context[source_var]
+                                print(f"Mapping pipeline argument: {source_var} -> {var_name} for node {node.name}")
+                            else:
+                                print(f"Warning: Pipeline argument '{source_var}' not found in context for node {node.name}")
+                        else:
+                            # Look for the source variable in context from previous nodes
+                            if source_var in context:
+                                # The variable will be available via wd.get_arg(var_name)
+                                # Store it in context with the target variable name
+                                node_context[var_name] = context[source_var]
+                                print(f"Mapping variable: {source_var} (from node {source_node_id}) -> {var_name} for node {node.name}")
+                            else:
+                                print(f"Warning: Source variable '{source_var}' not found in context for node {node.name}")
             
-            # Extract only the actual input variables for this node
+            # Extract only mapped input variables for this node
             node_inputs = {}
-            if node.input_variables:
-                for input_var in node.input_variables:
+            if node.input_variable_mappings:
+                for input_var in node.input_variable_mappings.keys():
                     if input_var in node_context:
                         node_inputs[input_var] = node_context[input_var]
             
@@ -282,11 +377,11 @@ def execute_pipeline_async(execution_id):
                 backend = get_execution_backend()
                 output = backend.execute_node(node, node_context, execution)
                 
-                # Update global context with node outputs (using original variable names)
-                for var_name in node.output_variables:
-                    if var_name in output:
-                        # Store with full node.variable naming for later connections
-                        context[var_name] = output[var_name]
+                # Update global context with ALL node outputs
+                # Since we removed output_variables, we collect everything
+                for var_name, var_value in output.items():
+                    if not var_name.startswith('_'):  # Skip internal variables
+                        context[var_name] = var_value
                 
                 node_execution.status = 'completed'
                 node_execution.output_data = output

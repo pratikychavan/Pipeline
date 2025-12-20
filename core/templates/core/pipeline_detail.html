@@ -50,12 +50,12 @@
             <p class="text-muted mb-0">{{ pipeline.description|default:"No description provided" }}</p>
         </div>
         <div class="btn-toolbar">
-            <a href="{% url 'node_create' pipeline.pk %}" class="btn btn-primary">
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createNodeModal">
                 <i class="fas fa-plus"></i> Add Node
-            </a>
-            <a href="{% url 'pipeline_update' pipeline.pk %}" class="btn btn-outline-secondary">
+            </button>
+            <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editPipelineModal">
                 <i class="fas fa-edit"></i> Edit
-            </a>
+            </button>
             <a href="{% url 'pipeline_executions' pipeline.pk %}" class="btn btn-outline-info">
                 <i class="fas fa-history"></i> History
             </a>
@@ -154,9 +154,9 @@
                                     </div>
                                     <div class="mt-2">
                                         <div class="btn-group btn-group-sm">
-                                            <a href="{% url 'node_edit' node.pk %}" class="btn btn-outline-primary btn-sm" title="Edit Node">
+                                            <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#editNodeModal{{ node.pk }}" title="Edit Node">
                                                 <i class="fas fa-edit"></i>
-                                            </a>
+                                            </button>
                                             <button class="btn btn-outline-info btn-sm" onclick="showNodeCode('{{ node.pk }}')" title="View Code">
                                                 <i class="fas fa-code"></i>
                                             </button>
@@ -176,9 +176,9 @@
                                 <i class="fas fa-plus-circle fa-3x text-muted mb-3"></i>
                                 <h5 class="text-muted">No Nodes Yet</h5>
                                 <p class="text-muted">Add your first node to start building the workflow.</p>
-                                <a href="{% url 'node_create' pipeline.pk %}" class="btn btn-primary">
+                                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createNodeModal">
                                     <i class="fas fa-plus"></i> Add First Node
-                                </a>
+                                </button>
                             </div>
                         {% endfor %}
                         </div> <!-- End pipeline-canvas -->
@@ -420,70 +420,36 @@
             return; // No connections to draw
         }
         
-        // Convert database connections to drawable connections
-        const connections = [];
-        connectionsData.forEach(dbConn => {
-            const fromNode = document.getElementById('node-' + dbConn.from_node);
-            const toNode = document.getElementById('node-' + dbConn.to_node);
+        // Draw simple node-to-node connections
+        connectionsData.forEach(conn => {
+            const fromNode = document.getElementById('node-' + conn.from_node);
+            const toNode = document.getElementById('node-' + conn.to_node);
             
-            if (fromNode && toNode) {
-                // Find the specific variable badges (check both expanded and collapsed views)
-                let fromBadge = Array.from(fromNode.querySelectorAll('.output-var'))
-                    .find(badge => badge.dataset.var === dbConn.from_output && 
-                          badge.offsetParent !== null); // Only visible badges
-                let toBadge = Array.from(toNode.querySelectorAll('.input-var'))
-                    .find(badge => badge.dataset.var === dbConn.to_input && 
-                          badge.offsetParent !== null); // Only visible badges
-                
-                if (fromBadge && toBadge) {
-                    connections.push({
-                        source: fromBadge,
-                        target: toBadge,
-                        variables: [dbConn.from_output + ' → ' + dbConn.to_input]
-                    });
-                }
-            }
-        });
-        
-        // Draw connections using stored node positions (zoom-independent)
-        connections.forEach(conn => {
-            const currentZoom = getCurrentZoomLevel();
-            
-            // Get node elements to extract their stored positions
-            const sourceNode = conn.source.closest('.node');
-            const targetNode = conn.target.closest('.node');
-            
-            if (!sourceNode || !targetNode) {
-                console.warn('Could not find parent nodes for badges');
+            if (!fromNode || !toNode) {
                 return;
             }
             
-            // Extract stored positions from node styles (these are zoom-independent)
-            const sourceNodeX = parseInt(sourceNode.style.left) || 0;
-            const sourceNodeY = parseInt(sourceNode.style.top) || 0;
-            const targetNodeX = parseInt(targetNode.style.left) || 0;
-            const targetNodeY = parseInt(targetNode.style.top) || 0;
+            const currentZoom = getCurrentZoomLevel();
             
-            // Get badge positions relative to their nodes
-            const sourceBadgeRect = conn.source.getBoundingClientRect();
-            const targetBadgeRect = conn.target.getBoundingClientRect();
-            const sourceNodeRect = sourceNode.getBoundingClientRect();
-            const targetNodeRect = targetNode.getBoundingClientRect();
+            // Get stored positions (zoom-independent)
+            const fromNodeX = parseInt(fromNode.style.left) || 0;
+            const fromNodeY = parseInt(fromNode.style.top) || 0;
+            const toNodeX = parseInt(toNode.style.left) || 0;
+            const toNodeY = parseInt(toNode.style.top) || 0;
             
-            // Calculate badge offsets within their nodes (these are consistent regardless of zoom)
-            const sourceBadgeOffsetX = (sourceBadgeRect.right - sourceNodeRect.left) / currentZoom;
-            const sourceBadgeOffsetY = (sourceBadgeRect.top - sourceNodeRect.top + sourceBadgeRect.height / 2) / currentZoom;
-            const targetBadgeOffsetX = (targetBadgeRect.left - targetNodeRect.left) / currentZoom;
-            const targetBadgeOffsetY = (targetBadgeRect.top - targetNodeRect.top + targetBadgeRect.height / 2) / currentZoom;
+            // Get node dimensions
+            const fromNodeRect = fromNode.getBoundingClientRect();
+            const toNodeRect = toNode.getBoundingClientRect();
+            const fromNodeWidth = fromNodeRect.width / currentZoom;
+            const fromNodeHeight = fromNodeRect.height / currentZoom;
+            const toNodeWidth = toNodeRect.width / currentZoom;
+            const toNodeHeight = toNodeRect.height / currentZoom;
             
-            // Calculate final positions using stored node positions + badge offsets
-            const sourceX = sourceNodeX + sourceBadgeOffsetX;
-            const sourceY = sourceNodeY + sourceBadgeOffsetY;
-            const targetX = targetNodeX + targetBadgeOffsetX;
-            const targetY = targetNodeY + targetBadgeOffsetY;
-            
-            // Debug logging
-            console.log(`Connection: zoom=${currentZoom}, stable coords: source=(${sourceX},${sourceY}), target=(${targetX},${targetY})`);
+            // Calculate connection points (from right side of source to left side of target)
+            const sourceX = fromNodeX + fromNodeWidth;
+            const sourceY = fromNodeY + fromNodeHeight / 2;
+            const targetX = toNodeX;
+            const targetY = toNodeY + toNodeHeight / 2;
             
             // Create curved line
             const midX = (sourceX + targetX) / 2;
@@ -494,18 +460,19 @@
             
             path.setAttribute('d', pathData);
             path.setAttribute('stroke', '#007bff');
-            path.setAttribute('stroke-width', '2'); // Fixed stroke width
+            path.setAttribute('stroke-width', '2');
             path.setAttribute('fill', 'none');
             path.setAttribute('marker-end', 'url(#arrowhead)');
             
-            // Add connection info as title
-            path.innerHTML = `<title>Variables: ${conn.variables.join(', ')}</title>`;
+            // Add connection info as title (hover tooltip)
+            const label = `${conn.from_output} → ${conn.to_input}`;
+            path.innerHTML = `<title>${label}</title>`;
             
             svg.appendChild(path);
         });
         
-        // Add arrow marker definition (recreate to handle zoom changes)
-        if (connections.length > 0) {
+        // Add arrow marker definition
+        if (connectionsData.length > 0) {
             // Remove existing marker if present
             const existingDefs = svg.querySelector('defs');
             if (existingDefs) {
@@ -514,7 +481,7 @@
             
             const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
             const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-            const markerSize = 10; // Fixed marker size
+            const markerSize = 10;
             
             marker.setAttribute('id', 'arrowhead');
             marker.setAttribute('markerWidth', markerSize);
@@ -848,4 +815,598 @@
     });
 
 </script>
+
+<!-- Create Node Modal -->
+<div class="modal fade" id="createNodeModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form id="createNodeForm" method="post" action="{% url 'node_create' pipeline.pk %}">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-cube"></i> Create New Node
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="createNodeErrors" class="alert alert-danger d-none"></div>
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="nodeName" class="form-label">
+                                    Node Name <span class="text-danger">*</span>
+                                </label>
+                                <input type="text" class="form-control" id="nodeName" name="name" required>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="nodeDescription" class="form-label">
+                                    Description
+                                </label>
+                                <input type="text" class="form-control" id="nodeDescription" name="description">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">
+                            Input Variable Mappings
+                            <button type="button" class="btn btn-sm btn-outline-primary ms-2" id="addInputVarBtn">
+                                <i class="fas fa-plus"></i> Add Input
+                            </button>
+                        </label>
+                        <div id="inputVariableMappings">
+                            <!-- Input variable mapping rows will be added here dynamically -->
+                        </div>
+                        <div class="form-text">Define variables this node will receive from other nodes</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="nodeCode" class="form-label">
+                            Python Code <span class="text-danger">*</span>
+                        </label>
+                        <textarea class="form-control" id="nodeCode" name="code" rows="10" required style="font-family: monospace;"></textarea>
+                        <div class="form-text">
+                            Write Python code that will be executed when this node runs. Use wd.get_arg('variable_name') to access input variables.
+                        </div>
+                    </div>
+                    
+                    <input type="hidden" name="input_variable_mappings" id="nodeInputVariableMappings" value="{}">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Create Node
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Pipeline Modal -->
+<div class="modal fade" id="editPipelineModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="editPipelineForm" method="post" action="{% url 'pipeline_update' pipeline.pk %}">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-edit"></i> Edit Pipeline
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="editPipelineErrors" class="alert alert-danger d-none"></div>
+                    
+                    <div class="mb-3">
+                        <label for="editPipelineName" class="form-label">
+                            Pipeline Name <span class="text-danger">*</span>
+                        </label>
+                        <input type="text" class="form-control" id="editPipelineName" name="name" value="{{ pipeline.name }}" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="editPipelineDescription" class="form-label">
+                            Description
+                        </label>
+                        <textarea class="form-control" id="editPipelineDescription" name="description" rows="3">{{ pipeline.description }}</textarea>
+                        <div class="form-text">
+                            Provide a brief description of what this pipeline does.
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">
+                            Global Argument Names
+                            <span class="text-muted small">(values provided at execution)</span>
+                        </label>
+                        <div id="editGlobalArgumentsContainer"></div>
+                        <button type="button" class="btn btn-sm btn-outline-primary mt-2" id="addEditGlobalArgBtn">
+                            <i class="fas fa-plus"></i> Add Argument
+                        </button>
+                        <input type="hidden" id="editPipelineGlobalArgs" name="global_arguments_text" value="">
+                        <div class="form-text">
+                            Define argument names that will be prompted during pipeline execution.
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Update Pipeline
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Node Modals for each node -->
+{% for node in nodes %}
+<div class="modal fade" id="editNodeModal{{ node.pk }}" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form class="editNodeForm" method="post" action="{% url 'node_edit' node.pk %}" data-node-id="{{ node.pk }}">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-edit"></i> Edit Node: {{ node.name }}
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="editNodeErrors alert alert-danger d-none"></div>
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">
+                                    Node Name <span class="text-danger">*</span>
+                                </label>
+                                <input type="text" class="form-control" name="name" value="{{ node.name }}" required>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">
+                                    Description
+                                </label>
+                                <input type="text" class="form-control" name="description" value="{{ node.description }}">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">
+                            Input Variable Mappings
+                            <button type="button" class="btn btn-sm btn-outline-primary ms-2 addEditInputVarBtn" data-node-id="{{ node.pk }}">
+                                <i class="fas fa-plus"></i> Add Input
+                            </button>
+                        </label>
+                        <div class="editInputVariableMappings" id="editInputVariableMappings{{ node.pk }}">
+                            <!-- Input variable mapping rows will be added here dynamically -->
+                        </div>
+                        <div class="form-text">Define variables this node will receive from other nodes</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">
+                            Python Code <span class="text-danger">*</span>
+                        </label>
+                        <textarea class="form-control editNodeCode" name="code" rows="10" required style="font-family: monospace;">{{ node.code }}</textarea>
+                        <div class="form-text">
+                            Write Python code that will be executed when this node runs. Use wd.get_arg('variable_name') to access input variables.
+                        </div>
+                    </div>
+                    
+                    <input type="hidden" name="input_variable_mappings" class="editNodeInputVariableMappings" value='{{ node.input_variable_mappings|safe }}'>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Update Node
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+<script>
+// Function to add global argument row in edit modal
+function addEditGlobalArgumentRow(argName = '') {
+    const container = document.getElementById('editGlobalArgumentsContainer');
+    const rowId = 'editGlobalArgRow_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    
+    const row = document.createElement('div');
+    row.className = 'global-arg-row mb-2 p-2 border rounded';
+    row.id = rowId;
+    row.innerHTML = `
+        <div class="row g-2">
+            <div class="col-md-11">
+                <label class="form-label small">Argument Name</label>
+                <input type="text" class="form-control form-control-sm arg-name" placeholder="db_host" value="${argName}">
+            </div>
+            <div class="col-md-1 d-flex align-items-end">
+                <button type="button" class="btn btn-sm btn-outline-danger w-100" onclick="document.getElementById('${rowId}').remove(); updateEditGlobalArgumentsHidden();">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+    `;
+    container.appendChild(row);
+}
+
+// Function to update hidden input with global arguments in edit modal
+function updateEditGlobalArgumentsHidden() {
+    const args = [];
+    document.querySelectorAll('#editGlobalArgumentsContainer .global-arg-row').forEach(row => {
+        const argName = row.querySelector('.arg-name').value.trim();
+        if (argName) {
+            args.push(argName);
+        }
+    });
+    document.getElementById('editPipelineGlobalArgs').value = args.join('\n');
+}
+
+// Add global argument button handler for edit modal
+document.getElementById('addEditGlobalArgBtn').addEventListener('click', function() {
+    addEditGlobalArgumentRow();
+    updateEditGlobalArgumentsHidden();
+});
+
+// Update hidden field when arguments change in edit modal
+document.addEventListener('input', function(e) {
+    if (e.target.closest('#editGlobalArgumentsContainer')) {
+        updateEditGlobalArgumentsHidden();
+    }
+});
+
+// Pre-populate global arguments in edit modal on page load
+const existingGlobalArgs = {{ pipeline_global_arguments_json|safe }};
+if (existingGlobalArgs.length > 0) {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            existingGlobalArgs.forEach(argName => {
+                addEditGlobalArgumentRow(argName);
+            });
+            updateEditGlobalArgumentsHidden();
+        });
+    } else {
+        // DOM already loaded
+        existingGlobalArgs.forEach(argName => {
+            addEditGlobalArgumentRow(argName);
+        });
+        updateEditGlobalArgumentsHidden();
+    }
+}
+
+// Handle pipeline edit form submission
+document.getElementById('editPipelineForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    // Update global arguments before submission
+    updateEditGlobalArgumentsHidden();
+    
+    const form = this;
+    const formData = new FormData(form);
+    const errorDiv = document.getElementById('editPipelineErrors');
+    
+    fetch(form.action, {
+        method: 'POST',
+        body: formData,
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Reload the page to show the updated pipeline
+            window.location.reload();
+        } else {
+            // Show errors
+            errorDiv.classList.remove('d-none');
+            errorDiv.innerHTML = '<strong>Error:</strong><br>' + 
+                Object.values(data.errors).flat().join('<br>');
+        }
+    })
+    .catch(error => {
+        errorDiv.classList.remove('d-none');
+        errorDiv.innerHTML = '<strong>Error:</strong><br>Failed to update pipeline. Please try again.';
+    });
+});
+
+// Available nodes for input mapping dropdowns
+const availableNodes = [
+    {% for node in nodes %}
+    { id: '{{ node.pk }}', name: '{{ node.name|escapejs }}' },
+    {% endfor %}
+];
+
+// Pipeline global arguments (available to all nodes)
+const pipelineGlobalArgs = {{ pipeline_global_arguments_json|safe }};
+
+// Function to add input variable mapping row
+function addInputVariableRow(containerId, varName = '', nodeId = '', sourceVar = '') {
+    const container = document.getElementById(containerId);
+    const rowId = 'inputVarRow_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    
+    const row = document.createElement('div');
+    row.className = 'input-var-mapping-row mb-2 p-2 border rounded';
+    row.id = rowId;
+    
+    // Build options for source node dropdown including pipeline-level args
+    let nodeOptions = '<option value="">Select source...</option>';
+    
+    // Add pipeline-level arguments option
+    if (pipelineGlobalArgs.length > 0) {
+        nodeOptions += '<option value="__pipeline__" ' + (nodeId === '__pipeline__' ? 'selected' : '') + '>Pipeline Arguments</option>';
+    }
+    
+    // Add nodes
+    nodeOptions += availableNodes.map(n => `<option value="${n.id}" ${n.id === nodeId ? 'selected' : ''}>${n.name}</option>`).join('');
+    
+    row.innerHTML = `
+        <div class="row g-2">
+            <div class="col-md-4">
+                <label class="form-label small">Variable Name</label>
+                <input type="text" class="form-control form-control-sm var-name" placeholder="my_var" value="${varName}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small">Source</label>
+                <select class="form-select form-select-sm source-node" onchange="updateSourceVariableOptions(this, '${rowId}')">
+                    ${nodeOptions}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small">Source Variable</label>
+                <input type="text" class="form-control form-control-sm source-var" placeholder="df" value="${sourceVar}" id="sourceVarInput_${rowId}">
+            </div>
+            <div class="col-md-1 d-flex align-items-end">
+                <button type="button" class="btn btn-sm btn-outline-danger w-100" onclick="document.getElementById('${rowId}').remove(); updateInputMappingsHidden();">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+    `;
+    container.appendChild(row);
+    
+    // Update source variable options if pipeline is selected and set initial value
+    if (nodeId === '__pipeline__' || nodeId) {
+        const sourceVarInput = row.querySelector('.source-var');
+        if (nodeId === '__pipeline__' && pipelineGlobalArgs.length > 0) {
+            // Create a select dropdown for pipeline arguments
+            const selectElement = document.createElement('select');
+            selectElement.className = 'form-select form-select-sm source-var';
+            selectElement.innerHTML = '<option value="">Select argument...</option>';
+            pipelineGlobalArgs.forEach(argName => {
+                const option = document.createElement('option');
+                option.value = argName;
+                option.textContent = argName;
+                if (argName === sourceVar) option.selected = true;
+                selectElement.appendChild(option);
+            });
+            sourceVarInput.replaceWith(selectElement);
+        }
+    }
+    if (nodeId === '__pipeline__') {
+        updateSourceVariableOptions(row.querySelector('.source-node'), rowId);
+    }
+}
+
+// Function to update source variable options based on selected source
+function updateSourceVariableOptions(selectElement, rowId) {
+    const selectedValue = selectElement.value;
+    const row = selectElement.closest('.input-var-mapping-row');
+    const sourceVarContainer = row.querySelector('.col-md-3');
+    
+    if (!sourceVarContainer) return;
+    
+    // Get the current source var element (might be input or select)
+    const currentElement = sourceVarContainer.querySelector('.source-var');
+    const currentValue = currentElement ? currentElement.value : '';
+    
+    if (selectedValue === '__pipeline__' && pipelineGlobalArgs.length > 0) {
+        // Replace with select dropdown for pipeline arguments
+        const selectElement = document.createElement('select');
+        selectElement.className = 'form-select form-select-sm source-var';
+        selectElement.innerHTML = '<option value="">Select argument...</option>';
+        pipelineGlobalArgs.forEach(argName => {
+            const option = document.createElement('option');
+            option.value = argName;
+            option.textContent = argName;
+            if (argName === currentValue) option.selected = true;
+            selectElement.appendChild(option);
+        });
+        currentElement.replaceWith(selectElement);
+    } else {
+        // Replace with text input for manual entry (node outputs)
+        const inputElement = document.createElement('input');
+        inputElement.type = 'text';
+        inputElement.className = 'form-control form-control-sm source-var';
+        inputElement.placeholder = 'df';
+        inputElement.value = currentValue;
+        currentElement.replaceWith(inputElement);
+    }
+}
+
+// Function to update hidden input field with all mappings
+function updateInputMappingsHidden() {
+    const mappings = {};
+    document.querySelectorAll('#inputVariableMappings .input-var-mapping-row').forEach(row => {
+        const varName = row.querySelector('.var-name').value.trim();
+        const sourceNode = row.querySelector('.source-node').value;
+        const sourceVar = row.querySelector('.source-var').value.trim();
+        
+        if (varName && sourceNode && sourceVar) {
+            mappings[varName] = {
+                node_id: sourceNode,
+                source_variable: sourceVar
+            };
+        }
+    });
+    document.getElementById('nodeInputVariableMappings').value = JSON.stringify(mappings);
+}
+
+// Add input variable button handler for create form
+document.getElementById('addInputVarBtn').addEventListener('click', function() {
+    addInputVariableRow('inputVariableMappings');
+    updateInputMappingsHidden();
+});
+
+// Update mappings when fields change
+document.addEventListener('input', function(e) {
+    if (e.target.closest('#inputVariableMappings')) {
+        updateInputMappingsHidden();
+    }
+});
+
+// Handle node creation form submission
+document.getElementById('createNodeForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const form = this;
+    const formData = new FormData(form);
+    const errorDiv = document.getElementById('createNodeErrors');
+    
+    // Update mappings before submission
+    updateInputMappingsHidden();
+    
+    fetch(form.action, {
+        method: 'POST',
+        body: formData,
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Reload the page to show the new node
+            window.location.reload();
+        } else {
+            // Show errors
+            errorDiv.classList.remove('d-none');
+            errorDiv.innerHTML = '<strong>Error:</strong><br>' + 
+                Object.values(data.errors).flat().join('<br>');
+        }
+    })
+    .catch(error => {
+        errorDiv.classList.remove('d-none');
+        errorDiv.innerHTML = '<strong>Error:</strong><br>Failed to create node. Please try again.';
+    });
+});
+
+// Handle node edit form submissions
+document.querySelectorAll('.editNodeForm').forEach(form => {
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const formData = new FormData(form);
+        const nodeId = form.dataset.nodeId;
+        const errorDiv = form.querySelector('.editNodeErrors');
+        
+        // Update mappings from the edit form
+        const editContainer = form.querySelector('.editInputVariableMappings');
+        const mappings = {};
+        editContainer.querySelectorAll('.input-var-mapping-row').forEach(row => {
+            const varName = row.querySelector('.var-name').value.trim();
+            const sourceNode = row.querySelector('.source-node').value;
+            const sourceVar = row.querySelector('.source-var').value.trim();
+            
+            if (varName && sourceNode && sourceVar) {
+                mappings[varName] = {
+                    node_id: sourceNode,
+                    source_variable: sourceVar
+                };
+            }
+        });
+        formData.set('input_variable_mappings', JSON.stringify(mappings));
+        
+        fetch(form.action, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Reload the page to show the updated node
+                window.location.reload();
+            } else {
+                // Show errors
+                errorDiv.classList.remove('d-none');
+                errorDiv.innerHTML = '<strong>Error:</strong><br>' + 
+                    Object.values(data.errors).flat().join('<br>');
+            }
+        })
+        .catch(error => {
+            errorDiv.classList.remove('d-none');
+            errorDiv.innerHTML = '<strong>Error:</strong><br>Failed to update node. Please try again.';
+        });
+    });
+});
+
+// Add input variable button handlers for edit forms
+document.querySelectorAll('.addEditInputVarBtn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const nodeId = this.dataset.nodeId;
+        const containerId = 'editInputVariableMappings' + nodeId;
+        const container = document.getElementById(containerId);
+        
+        // Use a modified version that updates the edit form's hidden field
+        const rowId = 'inputVarRow_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        
+        const row = document.createElement('div');
+        row.className = 'input-var-mapping-row mb-2 p-2 border rounded';
+        row.id = rowId;
+        row.innerHTML = `
+            <div class="row g-2">
+                <div class="col-md-4">
+                    <label class="form-label small">Variable Name</label>
+                    <input type="text" class="form-control form-control-sm var-name" placeholder="my_var">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small">Source Node</label>
+                    <select class="form-select form-select-sm source-node">
+                        <option value="">Select node...</option>
+                        ${availableNodes.map(n => `<option value="${n.id}">${n.name}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Source Variable</label>
+                    <input type="text" class="form-control form-control-sm source-var" placeholder="df">
+                </div>
+                <div class="col-md-1 d-flex align-items-end">
+                    <button type="button" class="btn btn-sm btn-outline-danger w-100" onclick="document.getElementById('${rowId}').remove();">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+        container.appendChild(row);
+    });
+});
+
+// Load existing mappings for edit forms
+{% for node in nodes %}
+(function() {
+    const mappings = {{ node.input_variable_mappings|safe }};
+    const containerId = 'editInputVariableMappings{{ node.pk }}';
+    if (mappings && Object.keys(mappings).length > 0) {
+        Object.entries(mappings).forEach(([varName, mapping]) => {
+            addInputVariableRow(containerId, varName, mapping.node_id, mapping.source_variable);
+        });
+    }
+})();
+{% endfor %}
+</script>
+
 {% endblock %}

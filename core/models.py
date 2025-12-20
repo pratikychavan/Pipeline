@@ -15,6 +15,11 @@ class Pipeline(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
     
+    # Global arguments available to all nodes in the pipeline
+    # Format: ["arg_name1", "arg_name2"]
+    global_arguments = models.JSONField(default=list, blank=True, 
+                                       help_text="Global argument names that will be prompted at execution")
+    
     class Meta:
         ordering = ['-created_at']
     
@@ -43,7 +48,11 @@ class Node(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
-    # Store input/output variable names as JSON
+    # Store input variable mappings as JSON
+    # Format: {"variable_name": {"node_id": "uuid", "source_variable": "var_name"}}
+    input_variable_mappings = models.JSONField(default=dict, blank=True)
+    
+    # Legacy fields for backward compatibility - will be deprecated
     input_variables = models.JSONField(default=list, blank=True)
     output_variables = models.JSONField(default=list, blank=True)
     

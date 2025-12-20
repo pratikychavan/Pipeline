@@ -229,7 +229,7 @@
                     <a href="{% url 'pipeline_list' %}" class="list-group-item list-group-item-action">
                         <i class="fas fa-list"></i> All Pipelines
                     </a>
-                    <a href="{% url 'pipeline_create' %}" class="list-group-item list-group-item-action">
+                    <a href="{% url 'pipeline_list' %}" class="list-group-item list-group-item-action" data-bs-toggle="modal" data-bs-target="#createPipelineModal" onclick="event.preventDefault();">
                         <i class="fas fa-plus"></i> New Pipeline
                     </a>
                     <a href="{% url 'execution_list' %}" class="list-group-item list-group-item-action">

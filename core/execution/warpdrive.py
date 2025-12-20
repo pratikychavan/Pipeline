@@ -96,7 +96,8 @@ class WarpDrive:
         # Load artifacts from context data if available
         self._load_artifacts_from_context()
         
-    def save_artifact(self, name: str, data: Any, serialization_func=None):
+    def save_artifact(self, name: str, data: Any, serialization_func=None, 
+                     serialization_args=None, serialization_kwargs=None):
         """
         Save an artifact with custom serialization function.
         
@@ -105,11 +106,17 @@ class WarpDrive:
             data: Data to save
             serialization_func: Function to serialize the data (e.g., df.to_parquet)
                               If None, uses pickle
+            serialization_args: Additional positional arguments for serialization function
+            serialization_kwargs: Additional keyword arguments for serialization function
         
         Example:
-            wd.save_artifact('df', df, serialization_func=df.to_parquet)
+            wd.save_artifact('df', df, serialization_func=df.to_parquet, 
+                           serialization_kwargs={'compression': 'gzip'})
         """
         import pickle
+        
+        serialization_args = serialization_args or []
+        serialization_kwargs = serialization_kwargs or {}
         
         # Create safe filename
         safe_name = name.replace('/', '_').replace('\\', '_')
@@ -129,12 +136,15 @@ class WarpDrive:
             file_name = f"{safe_name}.{ext}"
             file_path = os.path.join(self.artifact_storage_dir, file_name)
             
-            # Call serialization function
+            # Call serialization function with args and kwargs
             try:
-                serialization_func(file_path)
+                serialization_func(file_path, *serialization_args, **serialization_kwargs)
             except TypeError:
                 # Function might need the data as first argument
-                serialization_func(data, file_path)
+                try:
+                    serialization_func(data, file_path, *serialization_args, **serialization_kwargs)
+                except Exception as e:
+                    raise ValueError(f"Failed to serialize artifact '{name}': {str(e)}")
         else:
             # Use pickle as fallback
             file_name = f"{safe_name}.pkl"
@@ -158,127 +168,87 @@ class WarpDrive:
         
         self.log(f"Saved artifact '{name}' to {file_name}")
     
-    def get_arg(self, variable_name: str, deserialization_func=None) -> Any:
+    def get_arg(self, variable_name: str, deserialization_func=None,
+               deserialization_args=None, deserialization_kwargs=None) -> Any:
         """
-        Get input variable from connected nodes, loaded artifacts, or context data.
+        Get input variable from context data or loaded artifacts.
+        
+        With the new input_variable_mappings system, variables are already mapped
+        in the execution context, so we just need to look them up directly.
         
         Args:
             variable_name: The input variable name expected by current node
+            deserialization_func: Optional function to deserialize the data
+            deserialization_args: Additional positional arguments for deserialization function
+            deserialization_kwargs: Additional keyword arguments for deserialization function
             
         Returns:
-            The value from the connected output variable or loaded artifact
+            The value from the context data or loaded artifact
             
         Raises:
-            ValueError: If the input variable is not connected or available
+            ValueError: If the input variable is not available
         """
-        if not self.node_id:
-            raise ValueError("WarpDrive not properly initialized with node context")
-            
+        deserialization_args = deserialization_args or []
+        deserialization_kwargs = deserialization_kwargs or {}
+        
         # First check if this variable is available as a loaded artifact
         if variable_name in self.artifacts:
-            return self.artifacts[variable_name]['data']
+            data = self.artifacts[variable_name]['data']
+            self.loaded_data_ids.add(id(data))
+            return data
             
-        # Then find connection that provides this input
-        for connection in self.connections:
-            if (str(connection.to_node.id) == str(self.node_id) and 
-                connection.to_input == variable_name):
-                
-                source_var = connection.from_output
-                if source_var in self.context_data:
-                    value = self.context_data[source_var]
-                    
-                    # Check if this is a serialized artifact
-                    if isinstance(value, dict) and value.get('_artifact'):
-                        if '_error' in value:
-                            raise ValueError(f"Artifact '{source_var}' failed to serialize: {value['_error']}")
-                        
-                        artifact_type = value.get('_type')
-                        file_path = value.get('_file')
-                        
-                        if file_path:
-                            # Load from file with provided or default deserializer
-                            full_path = os.path.join(self.artifact_storage_dir, file_path)
-                            
-                            if deserialization_func:
-                                # Use user-provided deserialization
-                                try:
-                                    deserialized = deserialization_func(full_path)
-                                except Exception as e:
-                                    raise ValueError(f"Failed to deserialize artifact '{source_var}' with provided function: {str(e)}")
-                            else:
-                                # Try to find registered deserializer or use pickle
-                                deserializer = None
-                                for type_name, type_info in self.serializers.items():
-                                    if type_name.endswith(f".{artifact_type}") or type_info['type_class'].__name__ == artifact_type:
-                                        deserializer = type_info['deserialize']
-                                        break
-                                
-                                try:
-                                    deserialized = self._load_artifact_from_file(full_path, deserializer)
-                                except Exception as e:
-                                    raise ValueError(f"Failed to load artifact '{source_var}' from file: {str(e)}")
-                            
-                            self.log(f"Loaded artifact from file: {source_var} (type: {artifact_type})")
-                            # Track this variable as loaded input
-                            self.loaded_vars.add(variable_name)
-                            # Track the object id to exclude from outputs
-                            self.loaded_data_ids.add(id(deserialized))
-                            return deserialized
-                        else:
-                            raise ValueError(f"Artifact '{source_var}' has no file path")
-                    else:
-                        # Regular serializable value
-                        # Track this variable as loaded input
-                        self.loaded_vars.add(variable_name)
-                        # Track the object id to exclude from outputs
-                        self.loaded_data_ids.add(id(value))
-                        return value
-                else:
-                    raise ValueError(f"Connected variable '{source_var}' not found in context")
-        
-        # If not connected, check if it's in global context (external input)
+        # Check if the variable is in context_data (already mapped by execution engine)
         if variable_name in self.context_data:
             value = self.context_data[variable_name]
             
-            # Check if this is a serialized artifact that needs deserialization
+            # Check if this is a serialized artifact
             if isinstance(value, dict) and value.get('_artifact'):
-                artifact_type = value.get('_type', '')
+                if '_error' in value:
+                    raise ValueError(f"Artifact '{variable_name}' failed to serialize: {value['_error']}")
+                
+                artifact_type = value.get('_type')
                 file_path = value.get('_file')
                 
                 if file_path:
-                    # Look for appropriate deserializer
+                    # Load from file with provided or default deserializer
                     full_path = os.path.join(self.artifact_storage_dir, file_path)
                     
                     if deserialization_func:
-                        # Use user-provided deserialization
+                        # Use user-provided deserialization with args and kwargs
                         try:
-                            deserialized = deserialization_func(full_path)
+                            deserialized = deserialization_func(full_path, *deserialization_args, 
+                                                               **deserialization_kwargs)
                         except Exception as e:
                             raise ValueError(f"Failed to deserialize artifact '{variable_name}' with provided function: {str(e)}")
                     else:
-                        # Try registered deserializers or pickle
+                        # Try to find registered deserializer or use pickle
                         deserializer = None
                         for type_name, type_info in self.serializers.items():
-                            if (artifact_type == type_name or 
-                                type_name.endswith(f".{artifact_type}") or 
-                                artifact_type in type_name):
+                            if type_name.endswith(f".{artifact_type}") or type_info['type_class'].__name__ == artifact_type:
                                 deserializer = type_info['deserialize']
                                 break
                         
                         try:
                             deserialized = self._load_artifact_from_file(full_path, deserializer)
                         except Exception as e:
-                            raise ValueError(f"Failed to load artifact '{variable_name}': {str(e)}")
+                            raise ValueError(f"Failed to load artifact '{variable_name}' from file: {str(e)}")
                     
                     self.log(f"Loaded artifact from file: {variable_name} (type: {artifact_type})")
                     # Track this variable as loaded input
                     self.loaded_vars.add(variable_name)
+                    # Track the object id to exclude from outputs
+                    self.loaded_data_ids.add(id(deserialized))
                     return deserialized
-            
-            # Track this variable as loaded input
-            self.loaded_vars.add(variable_name)
-            return value
-            
+                else:
+                    raise ValueError(f"Artifact '{variable_name}' has no file path")
+            else:
+                # Regular serializable value
+                # Track this variable as loaded input
+                self.loaded_vars.add(variable_name)
+                # Track the object id to exclude from outputs
+                self.loaded_data_ids.add(id(value))
+                return value
+        
         # Variable not found - provide helpful error message
         available_vars = list(self.context_data.keys())
         available_artifacts = list(self.artifacts.keys())
@@ -288,8 +258,6 @@ class WarpDrive:
             f"Available as artifacts: {available_artifacts}\n"
             f"Make sure the variable is connected or the name matches the output from the previous node."
         )
-    
-
     
     def set_output(self, variable_name: str, value: Any):
         """

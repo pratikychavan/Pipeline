@@ -4,6 +4,17 @@ from .models import Pipeline, Node, NodeConnection
 import json
 
 class PipelineForm(forms.ModelForm):
+    global_arguments_text = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={
+            'class': 'form-control',
+            'rows': 4,
+            'placeholder': 'db_host\nbatch_size\napi_key'
+        }),
+        label='Global Argument Names',
+        help_text='List argument names (one per line) that will be prompted during execution'
+    )
+    
     class Meta:
         model = Pipeline
         fields = ['name', 'description']
@@ -11,50 +22,48 @@ class PipelineForm(forms.ModelForm):
             'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter pipeline name'}),
             'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Enter pipeline description'}),
         }
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            # Populate global_arguments_text from instance
+            if self.instance.global_arguments:
+                self.initial['global_arguments_text'] = '\n'.join(self.instance.global_arguments)
+    
+    def clean_global_arguments_text(self):
+        text = self.cleaned_data.get('global_arguments_text', '').strip()
+        if not text:
+            return []
+        # Split by newlines and filter out empty lines
+        arg_names = [line.strip() for line in text.split('\n') if line.strip()]
+        return arg_names
+    
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        instance.global_arguments = self.cleaned_data.get('global_arguments_text', [])
+        if commit:
+            instance.save()
+        return instance
 
 class NodeForm(forms.ModelForm):
     class Meta:
         model = Node
-        fields = ['name', 'description', 'code', 'input_variables', 'output_variables']
+        fields = ['name', 'description', 'code', 'input_variable_mappings']
         widgets = {
             'name': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter node name'}),
             'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 2, 'placeholder': 'Enter node description'}),
             'code': forms.Textarea(attrs={
                 'class': 'form-control code-editor custom-handled', 
                 'rows': 15, 
-                'placeholder': '# Write your Python code here\n# Example:\n# def process_data(input_data):\n#     result = input_data * 2\n#     return result',
+                'placeholder': '# Write your Python code here\n# Example:\n# wd = WarpDrive()\n# df = wd.get_arg("input_data", deserialization_func=pd.read_parquet)\n# result = process(df)\n# wd.save_artifact("output", result, serialization_func=result.to_parquet)',
                 'required': False  # Remove HTML5 required validation since CodeMirror handles this
             }),
-            'input_variables': forms.HiddenInput(),
-            'output_variables': forms.HiddenInput(),
+            'input_variable_mappings': forms.HiddenInput(),
         }
     
-    input_vars_text = forms.CharField(
-        required=False,
-        widget=forms.TextInput(attrs={
-            'class': 'form-control',
-            'placeholder': 'Enter input variable names (comma-separated)'
-        }),
-        help_text="Comma-separated list of input variable names"
-    )
-    
-    output_vars_text = forms.CharField(
-        required=False,
-        widget=forms.TextInput(attrs={
-            'class': 'form-control',
-            'placeholder': 'Enter output variable names (comma-separated)'
-        }),
-        help_text="Comma-separated list of output variable names"
-    )
-    
     def __init__(self, *args, **kwargs):
+        self.pipeline = kwargs.pop('pipeline', None)
         super().__init__(*args, **kwargs)
-        if self.instance and self.instance.pk:
-            # Convert JSON lists to comma-separated strings for display
-            if self.instance.input_variables:
-                self.fields['input_vars_text'].initial = ', '.join(self.instance.input_variables)
-            if self.instance.output_variables:
-                self.fields['output_vars_text'].initial = ', '.join(self.instance.output_variables)
     
     def clean(self):
         cleaned_data = super().clean()
@@ -64,31 +73,10 @@ class NodeForm(forms.ModelForm):
         if not code:
             raise forms.ValidationError({'code': 'Code field is required.'})
         
-        # Convert comma-separated strings to JSON lists
-        input_vars_text = cleaned_data.get('input_vars_text', '')
-        output_vars_text = cleaned_data.get('output_vars_text', '')
-        
-        if input_vars_text:
-            input_vars = [var.strip() for var in input_vars_text.split(',') if var.strip()]
-            cleaned_data['input_variables'] = input_vars
-        else:
-            cleaned_data['input_variables'] = []
-            
-        if output_vars_text:
-            output_vars = [var.strip() for var in output_vars_text.split(',') if var.strip()]
-            cleaned_data['output_variables'] = output_vars
-        else:
-            cleaned_data['output_variables'] = []
-        
         return cleaned_data
     
     def save(self, commit=True):
         instance = super().save(commit=False)
-        
-        # Ensure input_variables and output_variables are set from cleaned_data
-        if hasattr(self, 'cleaned_data'):
-            instance.input_variables = self.cleaned_data.get('input_variables', [])
-            instance.output_variables = self.cleaned_data.get('output_variables', [])
         
         if commit:
             instance.save()

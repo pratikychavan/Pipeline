@@ -40,30 +40,24 @@ class LocalExecutionBackend(ExecutionBackend):
         from .warpdrive import NodeExecutionContext
         from ..views import execute_node_code
         
-        # Get connections for this node
-        from ..models import NodeConnection
-        connections = list(NodeConnection.objects.filter(
-            from_node__pipeline=node.pipeline
-        ))
-        
         # Execute with context
         node_context = context.copy()
         
-        # Add connected inputs
-        for connection in connections:
-            if connection.to_node == node:
-                source_var = connection.from_output
-                target_var = connection.to_input
+        # Handle input variable mappings from the node's configuration
+        if node.input_variable_mappings:
+            for var_name, mapping in node.input_variable_mappings.items():
+                source_var = mapping.get('source_variable')
                 
-                if source_var in context:
-                    node_context[target_var] = context[source_var]
+                if source_var and source_var in context:
+                    node_context[var_name] = context[source_var]
         
         # Add execution metadata for WarpDrive initialization
+        # Note: We no longer pass connections, WarpDrive will use context_data directly
         node_context['__warpdrive_context__'] = {
             'node_id': str(node.id),
             'execution_id': str(execution.id),
-            'context_data': context,
-            'connections': connections
+            'context_data': node_context,  # Pass the mapped context
+            'input_variable_mappings': node.input_variable_mappings or {}
         }
         
         # Also set environment variables for container-based execution
