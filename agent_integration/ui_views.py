@@ -335,21 +335,38 @@ def agent_run_graph_view(request, agent_run_id):
     ).select_related('node')
     
     node_states = {}
+    node_exec_details = {}
+    
     for node_exec in node_executions:
-        node_states[str(node_exec.node.id)] = {
+        node_id = str(node_exec.node.id)
+        node_states[node_id] = {
             'status': node_exec.status,
             'started_at': node_exec.started_at,
             'completed_at': node_exec.completed_at,
             'error_message': node_exec.error_message
         }
+        
+        # Store detailed execution data
+        node_exec_details[node_id] = {
+            'input_data': node_exec.input_data or {},
+            'output_data': node_exec.output_data or {}
+        }
     
-    # Attach execution status directly to node objects for easier template access
+    # Attach execution status and data to node objects for easier template access
+    import json
     nodes_with_status = []
     for node in nodes:
-        node.execution_status = node_states.get(str(node.id), {}).get('status', 'pending')
-        node.execution_started_at = node_states.get(str(node.id), {}).get('started_at')
-        node.execution_completed_at = node_states.get(str(node.id), {}).get('completed_at')
-        node.execution_error = node_states.get(str(node.id), {}).get('error_message')
+        node_id = str(node.id)
+        node.execution_status = node_states.get(node_id, {}).get('status', 'pending')
+        node.execution_started_at = node_states.get(node_id, {}).get('started_at')
+        node.execution_completed_at = node_states.get(node_id, {}).get('completed_at')
+        node.execution_error = node_states.get(node_id, {}).get('error_message')
+        
+        # Add input/output data as JSON strings for template
+        exec_details = node_exec_details.get(node_id, {})
+        node.input_data_json = json.dumps(exec_details.get('input_data', {}))
+        node.output_data_json = json.dumps(exec_details.get('output_data', {}))
+        
         nodes_with_status.append(node)
     
     # Build connections from input_variable_mappings

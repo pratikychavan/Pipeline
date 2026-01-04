@@ -4,6 +4,26 @@
 
 ---
 
+## Recently Completed (January 4, 2026)
+
+### ✅ Fail-Fast on Node Failure
+- Added `fail_on_node_failure` configuration (default: True)
+- Immediately stops execution when any node fails
+- Prevents dependent nodes from executing after failures
+
+### ✅ Dependency Failure Cascading
+- Nodes with failed dependencies are automatically marked as failed
+- Prevents illogical execution of nodes with missing prerequisites
+- Proper graph traversal respecting dependency failures
+
+### ✅ Guardrail Configuration Enforcement
+- **Time Limits:** `max_execution_time_seconds` now enforced
+- **Cost Limits:** `max_cost_usd` tracked and enforced with LLM cost tracking
+- **High-Risk Approval:** `require_approval_for_high_risk` detects dangerous operations
+- Created comprehensive GUARDRAIL_CONFIGURATION.md guide
+
+---
+
 ## Critical (Must Do Soon)
 
 ### 1. Async Execution with Celery

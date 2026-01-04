@@ -47,6 +47,16 @@ class AgentExecutionLoop:
             default_config.update(agent_config)
         self.agent_config = default_config
         
+        # Extract guardrail config early (needed for guardrail engine initialization)
+        self.guardrail_config = agent_config.get('guardrail_config', {}) if agent_config else {}
+        
+        # Execution state
+        self.current_step = 0
+        self.consecutive_failures = 0
+        self.execution_context = {}
+        self.execution_start_time = None
+        self.total_cost_usd = 0.0
+        
         # Initialize agent run
         self.agent_run = self._initialize_agent_run()
         
@@ -54,15 +64,13 @@ class AgentExecutionLoop:
         self.runtime_spec = self._build_runtime_spec()
         
         # Initialize guardrails
-        self.guardrails = GuardrailEngine(self.runtime_spec.spec_data)
+        self.guardrails = GuardrailEngine(
+            self.runtime_spec.spec_data,
+            guardrail_config=self.guardrail_config
+        )
         
         # Initialize tool registry
         self.tool_registry = ToolRegistry(pipeline_execution.pipeline)
-        
-        # Execution state
-        self.current_step = 0
-        self.consecutive_failures = 0
-        self.execution_context = {}
     
     def _default_config(self) -> Dict[str, Any]:
         """Default agent configuration."""
@@ -72,6 +80,7 @@ class AgentExecutionLoop:
             'max_tokens': 2000,
             'enable_human_intervention': True,
             'max_steps': 100,
+            'fail_on_node_failure': True,  # Stop execution if any node fails
         }
     
     def _initialize_agent_run(self) -> AgentRun:
@@ -111,12 +120,19 @@ class AgentExecutionLoop:
             self.agent_run.status = 'planning'
             self.agent_run.save()
             
+            # Track execution start time
+            from django.utils import timezone
+            self.execution_start_time = timezone.now()
+            
             # Initialize context with pipeline arguments
             self._initialize_execution_context()
             
             # Main loop
             while not self._is_complete():
                 self.current_step += 1
+                
+                # Check guardrail limits
+                self._check_guardrail_limits()
                 
                 # Check iteration limit
                 if self.current_step > self.agent_run.max_steps:
@@ -136,7 +152,11 @@ class AgentExecutionLoop:
                 if step_result.get('status') == 'failed':
                     self.consecutive_failures += 1
                     
-                    # Check if too many failures
+                    # Check if should fail immediately on any node failure
+                    if self.agent_config.get('fail_on_node_failure', True):
+                        raise RuntimeError(f"Node execution failed: {step_result.get('error', 'Unknown error')}")
+                    
+                    # Check if too many consecutive failures
                     if self.consecutive_failures >= 3:
                         raise RuntimeError("Too many consecutive failures")
                 else:
@@ -215,6 +235,17 @@ class AgentExecutionLoop:
                 'status': 'failed',
                 'error': f"Tool {selected_node_id} not found"
             }
+        
+        # Check if high-risk approval is required
+        if self.guardrail_config.get('require_approval_for_high_risk', False):
+            # Check if this is a high-risk node
+            if self._is_high_risk_node(selected_node_id):
+                return {
+                    'status': 'failed',
+                    'error': 'High-risk operation requires human approval',
+                    'human_intervention_required': True,
+                    'reason': f'Node {selected_node_id} requires approval before execution'
+                }
         
         # Update status
         self.agent_run.status = 'executing'
@@ -378,6 +409,15 @@ class AgentExecutionLoop:
                         current_state=current_state
                     ))
                     
+                    # Track LLM cost (approximate using token counts)
+                    if hasattr(decision, 'usage') and decision.usage:
+                        # Rough estimate: gpt-4o-mini pricing
+                        # Input: $0.150 / 1M tokens, Output: $0.600 / 1M tokens
+                        prompt_tokens = decision.usage.get('prompt_tokens', 0)
+                        completion_tokens = decision.usage.get('completion_tokens', 0)
+                        cost = (prompt_tokens * 0.150 / 1_000_000) + (completion_tokens * 0.600 / 1_000_000)
+                        self.total_cost_usd += cost
+                    
                     # Convert decision type to action
                     from ..llm_planner import PlannerDecisionType
                     if decision.decision_type == PlannerDecisionType.EXECUTE_TOOL:
@@ -432,9 +472,41 @@ class AgentExecutionLoop:
         # TODO: Implement proper prompt engineering
         return f"Context: {context}"
     
+    def _check_guardrail_limits(self):
+        """Check if any guardrail limits have been exceeded."""
+        from django.utils import timezone
+        
+        # Check execution time limit
+        max_time = self.guardrail_config.get('max_execution_time_seconds')
+        if max_time and self.execution_start_time:
+            elapsed = (timezone.now() - self.execution_start_time).total_seconds()
+            if elapsed > max_time:
+                raise RuntimeError(
+                    f"Maximum execution time exceeded: {elapsed:.1f}s > {max_time}s"
+                )
+        
+        # Check cost limit
+        max_cost = self.guardrail_config.get('max_cost_usd')
+        if max_cost and self.total_cost_usd > max_cost:
+            raise RuntimeError(
+                f"Maximum cost exceeded: ${self.total_cost_usd:.4f} > ${max_cost:.4f}"
+            )
+    
     def _is_complete(self) -> bool:
         """Check if execution is complete."""
         return self.guardrails.graph_guardrails.state.is_complete()
+    
+    def _is_high_risk_node(self, node_id: str) -> bool:
+        """Determine if a node is considered high-risk."""
+        from core.models import Node
+        try:
+            node = Node.objects.get(id=node_id)
+            # Check if node description or name contains high-risk keywords
+            high_risk_keywords = ['delete', 'drop', 'remove', 'destroy', 'payment', 'transfer', 'charge']
+            node_text = f"{node.name} {node.description or ''}".lower()
+            return any(keyword in node_text for keyword in high_risk_keywords)
+        except Node.DoesNotExist:
+            return False
     
     def _initialize_execution_context(self):
         """Initialize execution context with pipeline arguments."""
@@ -489,7 +561,17 @@ class AgentExecutionLoop:
         decisions = AgentDecision.objects.filter(agent_run=self.agent_run).count()
         tools = self.agent_run.tool_executions.count()
         
-        return f"Executed {tools} tools across {decisions} agent decisions in {self.current_step} steps"
+        summary_parts = [f"Executed {tools} tools across {decisions} agent decisions in {self.current_step} steps"]
+        
+        if self.total_cost_usd > 0:
+            summary_parts.append(f"Total LLM cost: ${self.total_cost_usd:.4f}")
+        
+        if self.execution_start_time:
+            from django.utils import timezone
+            elapsed = (timezone.now() - self.execution_start_time).total_seconds()
+            summary_parts.append(f"Execution time: {elapsed:.1f}s")
+        
+        return " | ".join(summary_parts)
     
     def resume_from_human_intervention(self, human_response: Dict[str, Any]):
         """

@@ -78,7 +78,8 @@ class ExecutionState:
         """
         Get nodes that can be executed now.
         
-        A node is available if all its dependencies have been executed.
+        A node is available if all its dependencies have been executed successfully.
+        Nodes are NOT available if any of their dependencies failed.
         """
         available = set()
         
@@ -95,6 +96,14 @@ class ExecutionState:
             
             # Check if all dependencies are satisfied
             deps = self.dependencies.get(tool_id, set())
+            
+            # Check if any dependency failed - if so, this node cannot execute
+            if deps & self.failed_nodes:
+                # Mark this node as failed too since its dependencies failed
+                self.failed_nodes.add(tool_id)
+                continue
+            
+            # Check if all dependencies have been successfully executed
             if deps.issubset(self.executed_nodes):
                 available.add(tool_id)
         
@@ -354,9 +363,10 @@ class GuardrailEngine:
     Main guardrail engine coordinating all checks.
     """
     
-    def __init__(self, runtime_spec: Dict[str, Any]):
+    def __init__(self, runtime_spec: Dict[str, Any], guardrail_config: Optional[Dict[str, Any]] = None):
         self.graph_guardrails = GraphGuardrails(runtime_spec)
         self.policy_guardrails = PolicyGuardrails(runtime_spec)
+        self.guardrail_config = guardrail_config or {}
     
     def validate_before_execution(
         self,
