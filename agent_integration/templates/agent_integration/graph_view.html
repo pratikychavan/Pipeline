@@ -1,0 +1,269 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Graph View - Agent Run #{{ agent_run.pk }} - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>
+            <i class="fas fa-project-diagram"></i> Graph View - Agent Run #{{ agent_run.pk }}
+        </h2>
+        <div>
+            <a href="{% url 'agent_integration:agent_run_detail' agent_run.pk %}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left"></i> Back to Details
+            </a>
+        </div>
+    </div>
+
+    <div class="alert alert-info">
+        <i class="fas fa-info-circle"></i>
+        <strong>Read-Only View:</strong> This graph shows the pipeline structure with execution states marked by the agent.
+        Colors indicate execution status: <span class="badge bg-secondary">pending</span> 
+        <span class="badge bg-warning text-dark">running</span> 
+        <span class="badge bg-success">completed</span> 
+        <span class="badge bg-danger">failed</span>
+    </div>
+
+    <!-- Pipeline Graph Canvas -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="pipeline-canvas" id="graphCanvas" style="min-height: 600px; position: relative;">
+                <!-- Nodes will be rendered here -->
+                {% for node in nodes %}
+                <div class="node status-{{ node.execution_status }} draggable-node" 
+                     style="left: {{ node.position_x }}px; top: {{ node.position_y }}px; cursor: move;"
+                     data-node-id="{{ node.pk }}"
+                     draggable="false">
+                    <div class="node-header">
+                        <strong>{{ node.name }}</strong>
+                        <span class="badge 
+                            {% if node.execution_status == 'completed' %}bg-success
+                            {% elif node.execution_status == 'running' %}bg-warning text-dark
+                            {% elif node.execution_status == 'failed' %}bg-danger
+                            {% else %}bg-secondary
+                            {% endif %} float-end">
+                            {{ node.execution_status|title }}
+                        </span>
+                    </div>
+                    <div class="node-type text-muted small">
+                        <i class="fas fa-code"></i> Node #{{ node.order }}
+                    </div>
+                    {% if node.description %}
+                    <div class="node-description text-muted small mt-1">
+                        {{ node.description|truncatechars:80 }}
+                    </div>
+                    {% endif %}
+                    
+                    <!-- Execution Info -->
+                    <div class="mt-2 small">
+                        <span class="badge bg-info">Order: {{ node.order }}</span>
+                        {% if node.execution_started_at %}
+                        <div class="text-muted mt-1">
+                            <i class="fas fa-clock"></i> Started: {{ node.execution_started_at|date:"H:i:s" }}
+                        </div>
+                        {% endif %}
+                        {% if node.execution_completed_at %}
+                        <div class="text-muted">
+                            <i class="fas fa-check-circle"></i> Completed: {{ node.execution_completed_at|date:"H:i:s" }}
+                        </div>
+                        {% endif %}
+                        {% if node.execution_error %}
+                        <div class="text-danger mt-1">
+                            <i class="fas fa-exclamation-circle"></i> {{ node.execution_error|truncatechars:50 }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+
+                <!-- SVG for connections -->
+                <svg id="connectionsSvg" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;">
+                    {% for node in nodes %}
+                        {% for dep_id in node.dependencies_list %}
+                        <line class="connection" 
+                              data-from="{{ dep_id }}" 
+                              data-to="{{ node.pk }}"
+                              stroke="#6c757d" 
+                              stroke-width="2" 
+                              marker-end="url(#arrowhead)"/>
+                        {% endfor %}
+                    {% endfor %}
+                    
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                            <polygon points="0 0, 10 3, 0 6" fill="#6c757d" />
+                        </marker>
+                    </defs>
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="card mt-3">
+        <div class="card-body">
+            <h6>Status Legend:</h6>
+            <span class="badge bg-secondary me-2">Pending</span> Not yet executed
+            <span class="badge bg-warning text-dark me-2 ms-3">Running</span> Currently executing
+            <span class="badge bg-success me-2 ms-3">Completed</span> Successfully finished
+            <span class="badge bg-danger ms-3">Failed</span> Execution failed
+        </div>
+    </div>
+
+    <!-- Execution Statistics -->
+    {% if execution_stats %}
+    <div class="card mt-3">
+        <div class="card-header bg-secondary text-white">
+            <h6 class="mb-0"><i class="fas fa-chart-bar"></i> Execution Statistics</h6>
+        </div>
+        <div class="card-body">
+            <div class="row text-center">
+                <div class="col-md-3">
+                    <h4>{{ execution_stats.total_nodes }}</h4>
+                    <p class="text-muted">Total Nodes</p>
+                </div>
+                <div class="col-md-3">
+                    <h4 class="text-success">{{ execution_stats.completed }}</h4>
+                    <p class="text-muted">Completed</p>
+                </div>
+                <div class="col-md-3">
+                    <h4 class="text-warning">{{ execution_stats.running }}</h4>
+                    <p class="text-muted">Running</p>
+                </div>
+                <div class="col-md-3">
+                    <h4 class="text-danger">{{ execution_stats.failed }}</h4>
+                    <p class="text-muted">Failed</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+// Draw connections between nodes and make them draggable
+document.addEventListener('DOMContentLoaded', function() {
+    const svg = document.getElementById('connectionsSvg');
+    const canvas = document.getElementById('graphCanvas');
+    const lines = svg.querySelectorAll('.connection');
+    
+    // Make nodes draggable
+    const nodes = document.querySelectorAll('.draggable-node');
+    let isDragging = false;
+    let currentNode = null;
+    let startX, startY, initialLeft, initialTop;
+    
+    nodes.forEach(node => {
+        node.addEventListener('mousedown', function(e) {
+            isDragging = true;
+            currentNode = this;
+            
+            // Get initial position
+            const rect = this.getBoundingClientRect();
+            const canvasRect = canvas.getBoundingClientRect();
+            
+            startX = e.clientX;
+            startY = e.clientY;
+            initialLeft = this.offsetLeft;
+            initialTop = this.offsetTop;
+            
+            this.style.zIndex = '100';
+            e.preventDefault();
+        });
+    });
+    
+    document.addEventListener('mousemove', function(e) {
+        if (isDragging && currentNode) {
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            
+            currentNode.style.left = (initialLeft + dx) + 'px';
+            currentNode.style.top = (initialTop + dy) + 'px';
+            
+            updateConnections();
+        }
+    });
+    
+    document.addEventListener('mouseup', function(e) {
+        if (isDragging) {
+            isDragging = false;
+            if (currentNode) {
+                currentNode.style.zIndex = '10';
+                currentNode = null;
+            }
+        }
+    });
+    
+    function updateConnections() {
+        lines.forEach(line => {
+            const fromId = line.getAttribute('data-from');
+            const toId = line.getAttribute('data-to');
+            
+            const fromNode = canvas.querySelector(`.node[data-node-id="${fromId}"]`);
+            const toNode = canvas.querySelector(`.node[data-node-id="${toId}"]`);
+            
+            if (fromNode && toNode) {
+                const fromRect = fromNode.getBoundingClientRect();
+                const toRect = toNode.getBoundingClientRect();
+                const canvasRect = canvas.getBoundingClientRect();
+                
+                const x1 = fromRect.left + fromRect.width / 2 - canvasRect.left + canvas.scrollLeft;
+                const y1 = fromRect.top + fromRect.height - canvasRect.top + canvas.scrollTop;
+                const x2 = toRect.left + toRect.width / 2 - canvasRect.left + canvas.scrollLeft;
+                const y2 = toRect.top - canvasRect.top + canvas.scrollTop;
+                
+                line.setAttribute('x1', x1);
+                line.setAttribute('y1', y1);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2);
+            }
+        });
+    }
+    
+    updateConnections();
+    window.addEventListener('resize', updateConnections);
+});
+</script>
+
+<style>
+.pipeline-canvas {
+    background: #f8f9fa;
+    border: 2px solid #dee2e6;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.node {
+    position: absolute;
+    background: white;
+    border: 3px solid #007bff;
+    border-radius: 8px;
+    padding: 12px;
+    min-width: 200px;
+    max-width: 250px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    z-index: 10;
+}
+
+.node.status-pending { border-color: #6c757d; }
+.node.status-running { 
+    border-color: #ffc107; 
+    animation: pulse 2s infinite;
+}
+.node.status-completed { border-color: #28a745; }
+.node.status-failed { border-color: #dc3545; }
+
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 2px 8px rgba(255, 193, 7, 0.4); }
+    50% { box-shadow: 0 4px 16px rgba(255, 193, 7, 0.8); }
+}
+
+.node-header {
+    margin-bottom: 8px;
+}
+
+.connection {
+    z-index: 1;
+}
+</style>
+{% endblock %}

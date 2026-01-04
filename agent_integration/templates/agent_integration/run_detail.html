@@ -1,0 +1,304 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Agent Run #{{ agent_run.pk }} - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>
+            <i class="fas fa-robot"></i> Agent Run #{{ agent_run.pk }}
+            <span class="badge 
+                {% if agent_run.status == 'completed' %}bg-success
+                {% elif agent_run.status == 'running' %}bg-warning text-dark
+                {% elif agent_run.status == 'failed' %}bg-danger
+                {% elif agent_run.status == 'pending' %}bg-secondary
+                {% elif agent_run.status == 'waiting_for_human' %}bg-info
+                {% elif agent_run.status == 'aborted' %}bg-dark
+                {% else %}bg-secondary
+                {% endif %}">
+                {{ agent_run.status|upper }}
+            </span>
+        </h2>
+        <div>
+            <a href="{% url 'agent_integration:agent_dashboard' %}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left"></i> Back to Dashboard
+            </a>
+            <a href="{% url 'agent_integration:agent_run_graph_view' agent_run.pk %}" class="btn btn-info">
+                <i class="fas fa-project-diagram"></i> View Graph
+            </a>
+            <a href="{% url 'agent_integration:debug_context_view' agent_run.pk %}" class="btn btn-dark">
+                <i class="fas fa-bug"></i> Debug Context
+            </a>
+        </div>
+    </div>
+
+    <!-- Human-in-Loop Banner -->
+    {% if agent_run.status == 'waiting_for_human' %}
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <h4 class="alert-heading">
+            <i class="fas fa-hand-paper"></i> Human Intervention Required
+        </h4>
+        <p><strong>Reason:</strong> {{ agent_run.human_intervention_reason|default:"Agent is awaiting approval to continue." }}</p>
+        <hr>
+        <div class="d-flex gap-2">
+            <a href="{% url 'agent_integration:resume_agent_run' agent_run.pk %}" class="btn btn-success">
+                <i class="fas fa-play"></i> Resume Execution
+            </a>
+            <form method="post" action="{% url 'agent_integration:abort_agent_run' agent_run.pk %}" 
+                  style="display:inline;" 
+                  onsubmit="return confirm('Abort this agent run?');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-danger">
+                    <i class="fas fa-stop"></i> Abort Run
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Summary Card -->
+    <div class="card mb-4">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0"><i class="fas fa-info-circle"></i> Run Summary</h5>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-4">
+                    <p><strong>Pipeline:</strong> 
+                        <a href="{% url 'pipeline_detail' agent_run.pipeline_execution.pipeline.pk %}">{{ agent_run.pipeline_execution.pipeline.name }}</a>
+                    </p>
+                    <p><strong>Started:</strong> {{ agent_run.created_at|date:"M d, Y H:i:s" }}</p>
+                    {% if agent_run.completed_at %}
+                    <p><strong>Completed:</strong> {{ agent_run.completed_at|date:"M d, Y H:i:s" }}</p>
+                    {% endif %}
+                </div>
+                <div class="col-md-4">
+                    <p><strong>Total Decisions:</strong> {{ decisions.count }}</p>
+                    <p><strong>Tool Executions:</strong> {{ tool_executions.count }}</p>
+                    <p><strong>Guardrail Violations:</strong> 
+                        <span class="badge {% if all_violations|length > 0 %}bg-danger{% else %}bg-success{% endif %}">
+                            {{ all_violations|length }}
+                        </span>
+                    </p>
+                </div>
+                <div class="col-md-4">
+                    {% if agent_run.error_message %}
+                    <div class="alert alert-danger mb-0">
+                        <strong>Error:</strong> {{ agent_run.error_message }}
+                    </div>
+                    {% endif %}
+                    {% if agent_run.config %}
+                    <p><strong>Config:</strong></p>
+                    <pre class="bg-light p-2 small">{{ agent_run.config|truncatechars:200 }}</pre>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Guardrail Violations (if any) -->
+    {% if all_violations %}
+    <div class="card mb-4 border-danger">
+        <div class="card-header bg-danger text-white">
+            <h5 class="mb-0"><i class="fas fa-shield-alt"></i> Guardrail Violations ({{ all_violations|length }})</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>Step</th>
+                            <th>Violation Type</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for violation in all_violations %}
+                        <tr>
+                            <td>{{ violation.step }}</td>
+                            <td><span class="badge bg-danger">{{ violation.type }}</span></td>
+                            <td>{{ violation.message }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Execution Timeline -->
+    <div class="card mb-4">
+        <div class="card-header bg-secondary text-white">
+            <h5 class="mb-0"><i class="fas fa-clock"></i> Execution Timeline</h5>
+        </div>
+        <div class="card-body">
+            {% if decisions %}
+            <div class="timeline">
+                {% for decision in decisions %}
+                <div class="timeline-item mb-4 {% if decision.guardrail_violations %}border-danger{% endif %}" 
+                     style="border-left: 3px solid {% if decision.guardrail_violations %}#dc3545{% else %}#0d6efd{% endif %}; padding-left: 20px;">
+                    <div class="d-flex justify-content-between">
+                        <h6>
+                            <span class="badge bg-secondary">Step {{ decision.step_number }}</span>
+                            Decision #{{ decision.pk }}
+                        </h6>
+                        <small class="text-muted">{{ decision.created_at|date:"H:i:s" }}</small>
+                    </div>
+                    
+                    {% if decision.chosen_tool %}
+                    <p class="mb-1">
+                        <strong>Tool Chosen:</strong> 
+                        <code>{{ decision.chosen_tool }}</code>
+                    </p>
+                    {% endif %}
+
+                    {% if decision.reasoning %}
+                    <p class="mb-2">
+                        <strong>Reasoning:</strong> {{ decision.reasoning }}
+                    </p>
+                    {% endif %}
+
+                    {% if decision.safe_choices %}
+                    <p class="mb-1">
+                        <strong>Safe Choices ({{ decision.safe_choices|length }}):</strong>
+                        {% for choice in decision.safe_choices %}
+                            <span class="badge bg-info">{{ choice }}</span>
+                        {% endfor %}
+                    </p>
+                    {% endif %}
+
+                    {% if decision.guardrail_violations %}
+                    <div class="alert alert-danger mb-2 p-2">
+                        <i class="fas fa-exclamation-triangle"></i> 
+                        <strong>Guardrail Violations:</strong>
+                        <ul class="mb-0 mt-1">
+                            {% for violation in decision.guardrail_violations %}
+                            <li>{{ violation }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+
+                    {% if decision.context_snapshot %}
+                    <details class="mt-2">
+                        <summary class="text-muted" style="cursor: pointer;">
+                            <small>View Context Snapshot</small>
+                        </summary>
+                        <pre class="bg-light p-2 small mt-1">{{ decision.context_snapshot|truncatechars:500 }}</pre>
+                    </details>
+                    {% endif %}
+
+                    <!-- Tool Executions for this decision -->
+                    {% with decision_executions=tool_executions|dictsort:"created_at"|slice:":100" %}
+                    {% for execution in decision_executions %}
+                        {% if execution.decision.pk == decision.pk %}
+                        <div class="card mt-2 {% if execution.status == 'failed' %}border-danger{% endif %}">
+                            <div class="card-body p-2">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span>
+                                        <i class="fas fa-cog"></i> 
+                                        <strong>Tool Execution:</strong> {{ execution.tool_name }}
+                                    </span>
+                                    <span class="badge 
+                                        {% if execution.status == 'completed' %}bg-success
+                                        {% elif execution.status == 'running' %}bg-warning text-dark
+                                        {% elif execution.status == 'failed' %}bg-danger
+                                        {% else %}bg-secondary
+                                        {% endif %}">
+                                        {{ execution.status|upper }}
+                                    </span>
+                                </div>
+                                
+                                {% if execution.tool_params %}
+                                <details class="mt-1">
+                                    <summary class="text-muted" style="cursor: pointer;">
+                                        <small>Parameters</small>
+                                    </summary>
+                                    <pre class="bg-light p-1 small mt-1 mb-0">{{ execution.tool_params|truncatechars:300 }}</pre>
+                                </details>
+                                {% endif %}
+
+                                {% if execution.result_summary %}
+                                <p class="mb-0 mt-1"><small><strong>Result:</strong> {{ execution.result_summary|truncatechars:200 }}</small></p>
+                                {% endif %}
+
+                                {% if execution.error_message %}
+                                <div class="alert alert-danger p-1 mb-0 mt-1">
+                                    <small><strong>Error:</strong> {{ execution.error_message }}</small>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
+                    {% endfor %}
+                    {% endwith %}
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted text-center">No decisions recorded yet.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Artifacts Section -->
+    {% if agent_run.pipeline_execution %}
+    <div class="card">
+        <div class="card-header bg-info text-white">
+            <h5 class="mb-0"><i class="fas fa-database"></i> Generated Artifacts</h5>
+        </div>
+        <div class="card-body">
+            {% with latest_execution=agent_run.pipeline_execution %}
+            {% if latest_execution.artifacts.exists %}
+            <div class="table-responsive">
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>Artifact Name</th>
+                            <th>Node</th>
+                            <th>Type</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for artifact in latest_execution.artifacts.all %}
+                        <tr>
+                            <td><code>{{ artifact.key }}</code></td>
+                            <td>{{ artifact.node.name }}</td>
+                            <td><span class="badge bg-secondary">{{ artifact.value_type }}</span></td>
+                            <td>{{ artifact.created_at|date:"H:i:s" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted text-center mb-0">No artifacts generated yet.</p>
+            {% endif %}
+            {% endwith %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.timeline-item {
+    position: relative;
+}
+.timeline-item::before {
+    content: '';
+    position: absolute;
+    left: -9px;
+    top: 5px;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: #0d6efd;
+    border: 2px solid white;
+}
+.timeline-item.border-danger::before {
+    background: #dc3545;
+}
+</style>
+{% endblock %}

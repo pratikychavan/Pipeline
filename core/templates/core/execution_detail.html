@@ -1,6 +1,93 @@
 {% extends 'core/base.html' %}
+{% load pipeline_filters %}
 
 {% block title %}Execution Details - {{ block.super }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.status-graph-canvas {
+    background: linear-gradient(90deg, #f8f9fa 1px, transparent 1px), 
+                linear-gradient(#f8f9fa 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+.execution-node {
+    position: absolute;
+    background: white;
+    border: 3px solid;
+    border-radius: 8px;
+    padding: 12px;
+    min-width: 180px;
+    max-width: 220px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    user-select: none;
+}
+
+.execution-node.status-completed { 
+    border-color: #28a745;
+    background: linear-gradient(135deg, #ffffff 0%, #d4edda 100%);
+}
+
+.execution-node.status-failed { 
+    border-color: #dc3545;
+    background: linear-gradient(135deg, #ffffff 0%, #f8d7da 100%);
+}
+
+.execution-node.status-running { 
+    border-color: #ffc107;
+    background: linear-gradient(135deg, #ffffff 0%, #fff3cd 100%);
+    animation: pulse 1.5s infinite;
+}
+
+.execution-node.status-pending { 
+    border-color: #6c757d;
+    background: linear-gradient(135deg, #ffffff 0%, #e9ecef 100%);
+}
+
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 2px 8px rgba(255, 193, 7, 0.3); }
+    50% { box-shadow: 0 2px 16px rgba(255, 193, 7, 0.6); }
+}
+
+.execution-node-title {
+    font-weight: bold;
+    margin-bottom: 8px;
+    color: #333;
+    font-size: 0.95em;
+}
+
+.execution-node-status {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 0.75em;
+    font-weight: 600;
+    color: white;
+}
+
+.execution-node-status.status-completed { background-color: #28a745; }
+.execution-node-status.status-failed { background-color: #dc3545; }
+.execution-node-status.status-running { background-color: #ffc107; color: #000; }
+.execution-node-status.status-pending { background-color: #6c757d; }
+
+.connection-line {
+    stroke: #6c757d;
+    stroke-width: 2;
+    fill: none;
+    marker-end: url(#arrowhead);
+}
+
+.connection-line.from-completed {
+    stroke: #28a745;
+    stroke-width: 2.5;
+}
+
+.connection-line.from-failed {
+    stroke: #dc3545;
+    stroke-width: 2.5;
+}
+</style>
+{% endblock %}
 
 {% block content %}
 <div class="container-fluid p-4">
@@ -18,6 +105,80 @@
             <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }} fs-6">
                 {{ execution.get_status_display }}
             </span>
+        </div>
+    </div>
+    
+    <!-- Status Graph Visualization -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">
+                <i class="fas fa-project-diagram"></i> Execution Flow Visualization
+            </h5>
+            <div class="d-flex gap-3 align-items-center">
+                <small class="text-muted me-2">Status Legend:</small>
+                <span class="badge bg-success"><i class="fas fa-check-circle"></i> Completed</span>
+                <span class="badge bg-danger"><i class="fas fa-times-circle"></i> Failed</span>
+                <span class="badge bg-warning text-dark"><i class="fas fa-spinner"></i> Running</span>
+                <span class="badge bg-secondary"><i class="fas fa-clock"></i> Not Executed</span>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div class="status-graph-canvas" style="min-height: 500px; max-height: 600px; overflow: auto; position: relative;">
+                <div id="executionGraph" style="min-height: 1000px; min-width: 1500px; position: relative;">
+                    <!-- SVG layer for connections -->
+                    <svg id="connectionsSvg" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1;">
+                        <defs>
+                            <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                                <polygon points="0 0, 10 3, 0 6" fill="#6c757d" />
+                            </marker>
+                            <marker id="arrowhead-completed" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                                <polygon points="0 0, 10 3, 0 6" fill="#28a745" />
+                            </marker>
+                            <marker id="arrowhead-failed" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                                <polygon points="0 0, 10 3, 0 6" fill="#dc3545" />
+                            </marker>
+                        </defs>
+                    </svg>
+                    
+                    {% for node in pipeline_nodes %}
+                        {% with node_exec=node_exec_map|get_item:node.id|default:None %}
+                        <div class="execution-node status-{{ node_exec.status|default:'pending' }}" 
+                             id="exec-node-{{ node.pk }}"
+                             style="left: {{ node.position_x|default:'100' }}px; top: {{ node.position_y|default:'100' }}px;"
+                             data-node-id="{{ node.pk }}">
+                            <div class="execution-node-title">{{ node.name }}</div>
+                            <div class="mb-2">
+                                <span class="execution-node-status status-{{ node_exec.status|default:'pending' }}">
+                                    {% if node_exec %}
+                                        <i class="fas 
+                                            {% if node_exec.status == 'completed' %}fa-check-circle
+                                            {% elif node_exec.status == 'failed' %}fa-times-circle
+                                            {% elif node_exec.status == 'running' %}fa-spinner fa-spin
+                                            {% else %}fa-clock
+                                            {% endif %}"></i>
+                                        {{ node_exec.get_status_display }}
+                                    {% else %}
+                                        <i class="fas fa-clock"></i> Not Executed
+                                    {% endif %}
+                                </span>
+                            </div>
+                            {% if node_exec %}
+                                <div class="small text-muted">
+                                    {% if node_exec.started_at %}
+                                        <i class="fas fa-clock"></i> 
+                                        {% if node_exec.completed_at and node_exec.started_at %}
+                                            {{ node_exec.completed_at|timeuntil:node_exec.started_at }}
+                                        {% elif node_exec.started_at %}
+                                            Running...
+                                        {% endif %}
+                                    {% endif %}
+                                </div>
+                            {% endif %}
+                        </div>
+                        {% endwith %}
+                    {% endfor %}
+                </div>
+            </div>
         </div>
     </div>
     
@@ -156,6 +317,70 @@
 
 {% block extra_js %}
 <script>
+// Store connections data
+const connectionsData = {{ connections_json|safe }};
+
+// Draw connections between nodes
+function drawExecutionConnections() {
+    const svg = document.getElementById('connectionsSvg');
+    if (!svg) return;
+    
+    // Clear existing connections
+    const existingPaths = svg.querySelectorAll('.connection-line');
+    existingPaths.forEach(path => path.remove());
+    
+    connectionsData.forEach(conn => {
+        const fromNode = document.getElementById(`exec-node-${conn.from_node}`);
+        const toNode = document.getElementById(`exec-node-${conn.to_node}`);
+        
+        if (!fromNode || !toNode) return;
+        
+        const fromRect = fromNode.getBoundingClientRect();
+        const toRect = toNode.getBoundingClientRect();
+        const containerRect = svg.getBoundingClientRect();
+        
+        // Calculate connection points (right side of from node to left side of to node)
+        const x1 = fromRect.right - containerRect.left;
+        const y1 = fromRect.top + fromRect.height / 2 - containerRect.top;
+        const x2 = toRect.left - containerRect.left;
+        const y2 = toRect.top + toRect.height / 2 - containerRect.top;
+        
+        // Create curved path
+        const controlPointOffset = Math.abs(x2 - x1) / 2;
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        const d = `M ${x1} ${y1} C ${x1 + controlPointOffset} ${y1}, ${x2 - controlPointOffset} ${y2}, ${x2} ${y2}`;
+        
+        path.setAttribute('d', d);
+        path.setAttribute('class', 'connection-line');
+        
+        // Color the connection based on source node status
+        const fromNodeElement = fromNode;
+        if (fromNodeElement.classList.contains('status-completed')) {
+            path.classList.add('from-completed');
+            path.setAttribute('marker-end', 'url(#arrowhead-completed)');
+        } else if (fromNodeElement.classList.contains('status-failed')) {
+            path.classList.add('from-failed');
+            path.setAttribute('marker-end', 'url(#arrowhead-failed)');
+        } else {
+            path.setAttribute('marker-end', 'url(#arrowhead)');
+        }
+        
+        svg.appendChild(path);
+    });
+}
+
+// Draw connections on load
+document.addEventListener('DOMContentLoaded', function() {
+    drawExecutionConnections();
+    
+    // Redraw on window resize
+    let resizeTimeout;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(drawExecutionConnections, 100);
+    });
+});
+
 // Store node execution data in global scope
 let nodeExecutions = {};
 

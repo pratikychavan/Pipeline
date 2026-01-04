@@ -10,7 +10,7 @@ import json
 import inspect
 from typing import Dict, Any, Optional, List
 from django.conf import settings
-from ..models import Node, NodeConnection, PipelineExecution, NodeExecution
+from ..models import Node, PipelineExecution, NodeExecution
 
 
 class WarpDrive:
@@ -96,22 +96,34 @@ class WarpDrive:
         # Load artifacts from context data if available
         self._load_artifacts_from_context()
         
-    def save_artifact(self, name: str, data: Any, serialization_func=None, 
+    def save_artifact(self, name: str, data: Any, serialization_func=None,
                      serialization_args=None, serialization_kwargs=None):
         """
         Save an artifact with custom serialization function.
         
+        Supports two types of serialization functions:
+        1. File-writing functions (like df.to_parquet) that write directly to a file
+        2. Data-returning functions (like json.dumps) that return serialized data
+        
         Args:
             name: Artifact variable name
             data: Data to save
-            serialization_func: Function to serialize the data (e.g., df.to_parquet)
+            serialization_func: Function to serialize the data
+                              - File writers: df.to_parquet, df.to_csv, etc.
+                              - Data returners: json.dumps, pickle.dumps, etc.
                               If None, uses pickle
             serialization_args: Additional positional arguments for serialization function
             serialization_kwargs: Additional keyword arguments for serialization function
         
-        Example:
+        Examples:
+            # File-writing serializer
             wd.save_artifact('df', df, serialization_func=df.to_parquet, 
                            serialization_kwargs={'compression': 'gzip'})
+            
+            # Data-returning serializer
+            import json
+            wd.save_artifact('data', my_dict, serialization_func=json.dumps,
+                           serialization_kwargs={'indent': 2})
         """
         import pickle
         
@@ -122,7 +134,7 @@ class WarpDrive:
         safe_name = name.replace('/', '_').replace('\\', '_')
         
         if serialization_func:
-            # Use custom serialization - determine file extension from function name
+            # Detect file extension from function name
             func_name = getattr(serialization_func, '__name__', 'data')
             if 'parquet' in func_name.lower():
                 ext = 'parquet'
@@ -130,21 +142,72 @@ class WarpDrive:
                 ext = 'csv'
             elif 'json' in func_name.lower():
                 ext = 'json'
+            elif 'pickle' in func_name.lower() or 'pkl' in func_name.lower():
+                ext = 'pkl'
             else:
                 ext = 'dat'
             
             file_name = f"{safe_name}.{ext}"
             file_path = os.path.join(self.artifact_storage_dir, file_name)
             
-            # Call serialization function with args and kwargs
+            # Try to determine if this is a file-writing or data-returning function
+            # by checking the function signature
+            import inspect
             try:
-                serialization_func(file_path, *serialization_args, **serialization_kwargs)
-            except TypeError:
-                # Function might need the data as first argument
+                sig = inspect.signature(serialization_func)
+                params = list(sig.parameters.keys())
+                
+                # Check if first parameter looks like a file path parameter
+                # Common names: path, filepath, file_path, filename, fname, f, file
+                is_file_writer = False
+                if params:
+                    first_param = params[0].lower()
+                    file_param_names = {'path', 'filepath', 'file_path', 'filename', 'fname', 'file', 'f', 'fp'}
+                    is_file_writer = any(name in first_param for name in file_param_names)
+                
+                if is_file_writer:
+                    # File-writing function - pass file path
+                    try:
+                        serialization_func(file_path, *serialization_args, **serialization_kwargs)
+                    except TypeError:
+                        # Maybe it needs data as first arg: func(data, path)
+                        try:
+                            serialization_func(data, file_path, *serialization_args, **serialization_kwargs)
+                        except Exception as e:
+                            raise ValueError(f"Failed to serialize artifact '{name}' with file-writing function: {str(e)}")
+                else:
+                    # Data-returning function - call it and write result to file
+                    try:
+                        serialized_data = serialization_func(data, *serialization_args, **serialization_kwargs)
+                        
+                        # Write serialized data to file
+                        if isinstance(serialized_data, bytes):
+                            with open(file_path, 'wb') as f:
+                                f.write(serialized_data)
+                        elif isinstance(serialized_data, str):
+                            with open(file_path, 'w') as f:
+                                f.write(serialized_data)
+                        else:
+                            # Fallback: try to write as bytes
+                            with open(file_path, 'wb') as f:
+                                f.write(serialized_data)
+                    except Exception as e:
+                        raise ValueError(f"Failed to serialize artifact '{name}' with data-returning function: {str(e)}")
+            except Exception as e:
+                # If we can't inspect, try file-writing first, then data-returning
                 try:
-                    serialization_func(data, file_path, *serialization_args, **serialization_kwargs)
-                except Exception as e:
-                    raise ValueError(f"Failed to serialize artifact '{name}': {str(e)}")
+                    serialization_func(file_path, *serialization_args, **serialization_kwargs)
+                except:
+                    try:
+                        serialized_data = serialization_func(data, *serialization_args, **serialization_kwargs)
+                        if isinstance(serialized_data, bytes):
+                            with open(file_path, 'wb') as f:
+                                f.write(serialized_data)
+                        else:
+                            with open(file_path, 'w') as f:
+                                f.write(str(serialized_data))
+                    except Exception as e:
+                        raise ValueError(f"Failed to serialize artifact '{name}': {str(e)}")
         else:
             # Use pickle as fallback
             file_name = f"{safe_name}.pkl"
@@ -176,6 +239,21 @@ class WarpDrive:
         With the new input_variable_mappings system, variables are already mapped
         in the execution context, so we just need to look them up directly.
         
+        The deserialization function can follow two patterns:
+        
+        1. File-reading pattern (function takes file path):
+           - e.g., pd.read_parquet(filepath), pd.read_csv(filepath)
+           - Function receives the file path as first argument
+           
+        2. Data-processing pattern (function takes data):
+           - e.g., json.loads(string), pickle.loads(bytes)
+           - Function receives the file contents (bytes or string) as first argument
+           
+        The method automatically detects which pattern to use by inspecting the
+        function's signature. If the first parameter name contains 'path', 'file',
+        'filename', etc., it's treated as a file-reading function. Otherwise,
+        the file is read and its contents are passed to the function.
+        
         Args:
             variable_name: The input variable name expected by current node
             deserialization_func: Optional function to deserialize the data
@@ -184,6 +262,13 @@ class WarpDrive:
             
         Returns:
             The value from the context data or loaded artifact
+            
+        Examples:
+            # File-reading deserializer
+            df = wd.get_arg('input_df', deserialization_func=pd.read_parquet)
+            
+            # Data-processing deserializer
+            data = wd.get_arg('config', deserialization_func=json.loads)
             
         Raises:
             ValueError: If the input variable is not available
@@ -216,10 +301,58 @@ class WarpDrive:
                     if deserialization_func:
                         # Use user-provided deserialization with args and kwargs
                         try:
-                            deserialized = deserialization_func(full_path, *deserialization_args, 
-                                                               **deserialization_kwargs)
+                            # Detect if deserializer expects a file path or data
+                            # Check function signature to determine pattern
+                            sig = inspect.signature(deserialization_func)
+                            params = list(sig.parameters.keys())
+                            
+                            # Check if first parameter looks like a file path
+                            is_file_reader = False
+                            if params:
+                                first_param = params[0].lower()
+                                file_like_names = ['path', 'filepath', 'file_path', 'filename', 'fname', 'file', 'f', 'fp']
+                                is_file_reader = any(name in first_param for name in file_like_names)
+                            
+                            if is_file_reader:
+                                # File-reading deserializer (e.g., pd.read_parquet)
+                                deserialized = deserialization_func(full_path, *deserialization_args, 
+                                                                   **deserialization_kwargs)
+                            else:
+                                # Data-processing deserializer (e.g., json.loads, pickle.loads)
+                                # Read file content and pass to function
+                                with open(full_path, 'rb') as f:
+                                    data = f.read()
+                                
+                                # Try to decode as string if function might expect str
+                                try:
+                                    if 'loads' in deserialization_func.__name__:
+                                        # Functions like json.loads expect str, pickle.loads expect bytes
+                                        if 'json' in deserialization_func.__module__:
+                                            data = data.decode('utf-8')
+                                except:
+                                    pass
+                                
+                                deserialized = deserialization_func(data, *deserialization_args, 
+                                                                   **deserialization_kwargs)
                         except Exception as e:
-                            raise ValueError(f"Failed to deserialize artifact '{variable_name}' with provided function: {str(e)}")
+                            # Fallback: try both patterns
+                            try:
+                                # Try as file reader first
+                                deserialized = deserialization_func(full_path, *deserialization_args, 
+                                                                   **deserialization_kwargs)
+                            except:
+                                try:
+                                    # Try as data processor
+                                    with open(full_path, 'rb') as f:
+                                        data = f.read()
+                                    try:
+                                        data = data.decode('utf-8')
+                                    except:
+                                        pass
+                                    deserialized = deserialization_func(data, *deserialization_args, 
+                                                                       **deserialization_kwargs)
+                                except Exception as fallback_e:
+                                    raise ValueError(f"Failed to deserialize artifact '{variable_name}' with provided function: {str(e)}, fallback also failed: {str(fallback_e)}")
                     else:
                         # Try to find registered deserializer or use pickle
                         deserializer = None
@@ -272,102 +405,27 @@ class WarpDrive:
     def get_outputs(self) -> Dict[str, Any]:
         """
         Get all output variables created by the current node.
-        Automatically detects new variables created since initialization.
-        Handles both regular JSON-serializable variables and registered artifacts.
+        Only returns artifacts explicitly saved via save_artifact().
         
         Returns:
             Dictionary of output variable names to their serialized values
         """
         outputs = {}
-        current_vars = set(self.caller_globals.keys())
-        new_vars = current_vars - self.initial_vars
         
-        # First, handle registered artifacts
+        # Only handle explicitly saved artifacts (via save_artifact())
         for artifact_name, artifact_info in self.artifacts.items():
             # Skip artifacts that were loaded via get_arg() - they're inputs, not outputs
             if artifact_name in self.loaded_vars:
                 continue
             
-            # Only include artifacts that are new variables (created in this node)
-            if artifact_name not in new_vars:
-                continue
-                
-            try:
-                # Save artifact to file
-                file_path = self._save_artifact_to_file(
-                    artifact_name, 
-                    artifact_info['data'],
-                    artifact_info.get('serializer')
-                )
-                
-                outputs[artifact_name] = {
-                    '_artifact': True,
-                    '_type': artifact_info['type'],
-                    '_file': file_path
-                }
-                self.log(f"Serialized artifact to file: {artifact_name} -> {file_path}")
-            except Exception as e:
-                self.log(f"Failed to serialize artifact {artifact_name}: {str(e)}", 'ERROR')
-                outputs[artifact_name] = {
-                    '_artifact': True,
-                    '_type': artifact_info['type'],
-                    '_error': f"Serialization failed: {str(e)}"
-                }
-        
-        # Then handle regular variables
-        import types
-        for var_name in new_vars:
-            # Skip loaded input variables
-            if var_name in self.loaded_vars:
-                continue
-            
-            value = self.caller_globals[var_name]
-            
-            # Skip modules
-            if isinstance(value, types.ModuleType):
-                continue
-                
-            if (not var_name.startswith('_') and 
-                not var_name in ['WarpDrive', 'wd'] and
-                var_name not in ['os', 'sys', 'json', 'pd', 'np', 'pandas', 'numpy', 'sklearn', 'torch', 'tensorflow'] and
-                var_name not in self.artifacts):  # Skip artifacts already handled
-                try:
-                    # Test if serializable (don't use default= here - we want it to fail for non-serializable)
-                    json.dumps(value)
-                    outputs[var_name] = value
-                except (TypeError, ValueError):
-                    # Non-serializable object - check if we have a registered serializer for this type
-                    value_type = type(value)
-                    serializer_found = False
-                    
-                    for type_name, type_info in self.serializers.items():
-                        if isinstance(value, type_info.get('type_class', type)):
-                            # Found a registered serializer for this type
-                            try:
-                                file_path = self._save_artifact_to_file(
-                                    var_name,
-                                    value,
-                                    type_info['serialize']
-                                )
-                                outputs[var_name] = {
-                                    '_artifact': True,
-                                    '_type': value_type.__name__,
-                                    '_file': file_path
-                                }
-                                self.log(f"Auto-serialized {var_name} as artifact (type: {value_type.__name__})")
-                                serializer_found = True
-                                break
-                            except Exception as e:
-                                self.log(f"Failed to serialize {var_name}: {str(e)}", 'ERROR')
-                    
-                    if not serializer_found:
-                        # No serializer available - convert to string representation
-                        outputs[var_name] = {
-                            '_artifact': False,
-                            '_type': type(value).__name__,
-                            '_string_repr': str(value),
-                            '_note': 'Non-serializable object converted to string. Consider using register_artifact() for proper handling.'
-                        }
+            # Artifact was already saved to file by save_artifact()
+            # Just return the metadata
+            outputs[artifact_name] = {
+                '_artifact': True,
+                '_type': artifact_info['type'],
+                '_file': artifact_info['file']
+            }
+            self.log(f"Output artifact: {artifact_name} -> {artifact_info['file']}")
         
         return outputs
     
@@ -708,7 +766,7 @@ class WarpDrive:
                     file_path = value.get('_file')
                     
                     if not file_path:
-                        # Old format with _data - skip or handle legacy
+                        # Skip artifacts without file paths
                         continue
                     
                     # Find the appropriate deserializer
@@ -814,50 +872,3 @@ class WarpDrive:
             }
         except PipelineExecution.DoesNotExist:
             return {}
-
-
-class NodeExecutionContext:
-    """
-    Context manager for node execution with automatic cleanup and output capture.
-    """
-    
-    def __init__(self, node: Node, execution: PipelineExecution, 
-                 context_data: Dict[str, Any], connections: List[NodeConnection]):
-        self.node = node
-        self.execution = execution
-        self.context_data = context_data
-        self.connections = connections
-        self.warpdrive = None
-        
-    def __enter__(self) -> WarpDrive:
-        """Enter the execution context and create WarpDrive instance."""
-        execution_context = {
-            'node_id': str(self.node.id),
-            'execution_id': str(self.execution.id),
-            'context_data': self.context_data,
-            'connections': self.connections
-        }
-        
-        self.warpdrive = WarpDrive(execution_context)
-        return self.warpdrive
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit the execution context and capture outputs."""
-        if self.warpdrive and not exc_type:
-            # Capture outputs automatically
-            outputs = self.warpdrive.get_outputs()
-            
-            # Update node execution with outputs
-            try:
-                node_execution = NodeExecution.objects.filter(
-                    pipeline_execution=self.execution,
-                    node=self.node
-                ).latest('started_at')
-                
-                current_output = node_execution.output_data or {}
-                current_output.update(outputs)
-                node_execution.output_data = current_output
-                node_execution.save()
-                
-            except NodeExecution.DoesNotExist:
-                pass

@@ -1,0 +1,56 @@
+{% extends 'core/base.html' %}
+{% block title %}{{ tool.name }} - {{ block.super }}{% endblock %}
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2><i class="fas fa-toolbox"></i> {{ tool.name }} {% if tool.is_enabled %}<span class="badge bg-success">ENABLED</span>{% else %}<span class="badge bg-secondary">DISABLED</span>{% endif %}</h2>
+        <div>
+            <a href="{% url 'agent_integration:cp_tool_list' %}" class="btn btn-outline-secondary"><i class="fas fa-arrow-left"></i> Back</a>
+            <a href="{% url 'agent_integration:cp_tool_edit' tool.id %}" class="btn btn-primary"><i class="fas fa-edit"></i> Edit</a>
+            <form method="post" action="{% url 'agent_integration:cp_tool_toggle' tool.id %}" style="display:inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-{% if tool.is_enabled %}warning{% else %}success{% endif %}">
+                    <i class="fas fa-{% if tool.is_enabled %}ban{% else %}check{% endif %}"></i> {% if tool.is_enabled %}Disable{% else %}Enable{% endif %}
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0">Details</h5></div>
+                <div class="card-body">
+                    <p>{{ tool.description }}</p>
+                    <p><strong>Type:</strong> {{ tool.executor_type|title }}</p>
+                    {% if tool.pipeline %}<p><strong>Pipeline:</strong> {{ tool.pipeline.name }}</p>{% endif %}
+                    {% if tool.node_name %}<p><strong>Node:</strong> {{ tool.node_name }}</p>{% endif %}
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header"><h5 class="mb-0">Schema</h5></div>
+                <div class="card-body">
+                    <h6>Input Schema:</h6>
+                    <pre class="bg-light p-2"><code>{{ tool.input_schema|safe }}</code></pre>
+                    <h6 class="mt-3">Output Schema:</h6>
+                    <pre class="bg-light p-2"><code>{{ tool.output_schema|safe }}</code></pre>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header"><h5 class="mb-0">Agent Mappings</h5></div>
+                <div class="list-group list-group-flush">
+                    {% for mapping in agent_mappings %}
+                    <a href="{% url 'agent_integration:cp_agent_detail' mapping.agent.id %}" class="list-group-item list-group-item-action">
+                        {{ mapping.agent.name }}
+                        <span class="badge bg-primary float-end">Priority: {{ mapping.priority }}</span>
+                    </a>
+                    {% empty %}
+                    <div class="list-group-item text-muted">Not mapped to any agents</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

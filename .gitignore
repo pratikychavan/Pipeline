@@ -50,3 +50,5 @@ celerybeat.pid
 # Migrations (optional - uncomment if you don't want to track migrations)
 # */migrations/*.py
 # !*/migrations/__init__.py
+
+artifacts/

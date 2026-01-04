@@ -25,16 +25,45 @@
                             <p class="card-text text-muted">
                                 {{ pipeline.description|default:"No description" }}
                             </p>
-                            <div class="small text-muted mb-3">
+                            <div class="small text-muted mb-2">
                                 <i class="fas fa-calendar"></i> Created {{ pipeline.created_at|date:"M d, Y" }}
                                 <br>
                                 <i class="fas fa-nodes"></i> {{ pipeline.nodes.count }} nodes
                             </div>
+                            {% if pipeline.last_execution_status %}
+                            <div class="mb-2">
+                                <span class="badge 
+                                    {% if pipeline.last_execution_status == 'completed' %}bg-success
+                                    {% elif pipeline.last_execution_status == 'running' %}bg-warning text-dark
+                                    {% elif pipeline.last_execution_status == 'failed' %}bg-danger
+                                    {% elif pipeline.last_execution_status == 'pending' %}bg-secondary
+                                    {% else %}bg-info
+                                    {% endif %}">
+                                    <i class="fas 
+                                        {% if pipeline.last_execution_status == 'completed' %}fa-check-circle
+                                        {% elif pipeline.last_execution_status == 'running' %}fa-spinner fa-spin
+                                        {% elif pipeline.last_execution_status == 'failed' %}fa-times-circle
+                                        {% elif pipeline.last_execution_status == 'pending' %}fa-clock
+                                        {% else %}fa-question-circle
+                                        {% endif %}"></i>
+                                    Last Run: {{ pipeline.last_execution_status|title }}
+                                </span>
+                                <small class="text-muted d-block mt-1">
+                                    {{ pipeline.last_execution_time|timesince }} ago
+                                </small>
+                            </div>
+                            {% else %}
+                            <div class="mb-2">
+                                <span class="badge bg-light text-dark border">
+                                    <i class="fas fa-exclamation-circle"></i> Never executed
+                                </span>
+                            </div>
+                            {% endif %}
                         </div>
                         <div class="card-footer bg-transparent">
                             <div class="btn-group w-100" role="group">
                                 <a href="{% url 'pipeline_detail' pipeline.pk %}" class="btn btn-outline-primary btn-sm">
-                                    <i class="fas fa-folder-open"></i> Open
+                                    <i class="fas fa-edit"></i> Edit
                                 </a>
                                 <a href="{% url 'pipeline_executions' pipeline.pk %}" class="btn btn-outline-info btn-sm" title="Execution History">
                                     <i class="fas fa-history"></i> History

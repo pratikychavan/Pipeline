@@ -1,0 +1,50 @@
+{% extends 'core/base.html' %}
+{% block title %}{{ action }} Condition - {{ block.super }}{% endblock %}
+{% block content %}
+<div class="container-fluid p-4">
+    <h2><i class="fas fa-code-branch"></i> {{ action }} Business Condition</h2>
+    <form method="post" class="mt-3">
+        {% csrf_token %}
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Name</label>
+                        {{ form.name }}
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">Version</label>
+                        {{ form.version }}
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <div class="form-check mt-4">
+                            {{ form.is_active }}
+                            <label class="form-check-label">Active</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    {{ form.description }}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Condition Type</label>
+                    {{ form.condition_type }}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Configuration (JSON)</label>
+                    {{ form.condition_config_json }}
+                    {% if form.condition_config_json.errors %}<div class="text-danger">{{ form.condition_config_json.errors }}</div>{% endif %}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Test Cases (JSON)</label>
+                    {{ form.test_cases_json }}
+                    {% if form.test_cases_json.errors %}<div class="text-danger">{{ form.test_cases_json.errors }}</div>{% endif %}
+                </div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-warning"><i class="fas fa-save"></i> {{ action }}</button>
+        <a href="{% if condition %}{% url 'agent_integration:cp_condition_detail' condition.id %}{% else %}{% url 'agent_integration:cp_condition_list' %}{% endif %}" class="btn btn-secondary">Cancel</a>
+    </form>
+</div>
+{% endblock %}

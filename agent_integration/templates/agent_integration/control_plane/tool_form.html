@@ -1,0 +1,57 @@
+{% extends 'core/base.html' %}
+{% block title %}{{ action }} Tool - {{ block.super }}{% endblock %}
+{% block content %}
+<div class="container-fluid p-4">
+    <h2><i class="fas fa-toolbox"></i> {{ action }} Tool</h2>
+    <form method="post" class="mt-3">
+        {% csrf_token %}
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Name</label>
+                        {{ form.name }}
+                        {% if form.name.errors %}<div class="text-danger">{{ form.name.errors }}</div>{% endif %}
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">Executor Type</label>
+                        {{ form.executor_type }}
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <div class="form-check mt-4">
+                            {{ form.is_enabled }}
+                            <label class="form-check-label">Enabled</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    {{ form.description }}
+                </div>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Pipeline</label>
+                        {{ form.pipeline }}
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Node Name</label>
+                        {{ form.node_name }}
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Input Schema (JSON)</label>
+                    {{ form.input_schema_json }}
+                    {% if form.input_schema_json.errors %}<div class="text-danger">{{ form.input_schema_json.errors }}</div>{% endif %}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Output Schema (JSON)</label>
+                    {{ form.output_schema_json }}
+                    {% if form.output_schema_json.errors %}<div class="text-danger">{{ form.output_schema_json.errors }}</div>{% endif %}
+                </div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> {{ action }}</button>
+        <a href="{% if tool %}{% url 'agent_integration:cp_tool_detail' tool.id %}{% else %}{% url 'agent_integration:cp_tool_list' %}{% endif %}" class="btn btn-secondary">Cancel</a>
+    </form>
+</div>
+{% endblock %}

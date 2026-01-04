@@ -16,12 +16,10 @@ import sys
 from io import StringIO
 import threading
 import time
-import ast
-import re
 from datetime import datetime, timezone
 
-from .models import Pipeline, Node, NodeConnection, PipelineExecution, NodeExecution
-from .forms import PipelineForm, NodeForm, NodeConnectionForm, CodeExecutionForm
+from .models import Pipeline, Node, PipelineExecution, NodeExecution
+from .forms import PipelineForm, NodeForm, CodeExecutionForm
 from .execution_engine import execute_pipeline_async
 from .execution import get_execution_backend
 
@@ -33,7 +31,20 @@ class PipelineListView(LoginRequiredMixin, ListView):
     context_object_name = 'pipelines'
     
     def get_queryset(self):
-        return Pipeline.objects.filter(created_by=self.request.user, is_active=True)
+        from django.db.models import Subquery, OuterRef
+        
+        # Subquery to get the last execution for each pipeline
+        last_execution = PipelineExecution.objects.filter(
+            pipeline=OuterRef('pk')
+        ).order_by('-started_at').values('status', 'started_at')[:1]
+        
+        return Pipeline.objects.filter(
+            created_by=self.request.user, 
+            is_active=True
+        ).annotate(
+            last_execution_status=Subquery(last_execution.values('status')),
+            last_execution_time=Subquery(last_execution.values('started_at'))
+        )
 
 class PipelineCreateView(LoginRequiredMixin, CreateView):
     model = Pipeline
@@ -121,30 +132,8 @@ class PipelineDeleteView(LoginRequiredMixin, DeleteView):
 def pipeline_detail(request, pk):
     pipeline = get_object_or_404(Pipeline, pk=pk, created_by=request.user)
     nodes = Node.objects.filter(pipeline=pipeline).order_by('order')
-    connections = NodeConnection.objects.filter(from_node__pipeline=pipeline)
     
-    # Collect input variables that are NOT satisfied by connections (external inputs only)
-    all_input_vars = set()
-    connected_inputs = set()
-    
-    # Add pipeline-level arguments to input variables
-    if pipeline.global_arguments:
-        for arg_name in pipeline.global_arguments:
-            all_input_vars.add(arg_name)
-    
-    # First, find all input variables that are satisfied by connections
-    for connection in connections:
-        connected_inputs.add((connection.to_node.id, connection.to_input))
-    
-    # Then collect only unsatisfied input variables
-    for node in nodes:
-        if node.input_variables:
-            for input_var in node.input_variables:
-                # Only include if this input is not connected from another node
-                if (node.id, input_var) not in connected_inputs:
-                    all_input_vars.add(input_var)
-    
-    # Generate connections from input_variable_mappings (new system)
+    # Generate connections from input_variable_mappings
     connections_data = []
     for node in nodes:
         if node.input_variable_mappings:
@@ -164,10 +153,9 @@ def pipeline_detail(request, pk):
     context = {
         'pipeline': pipeline,
         'nodes': nodes,
-        'connections': connections,
         'connections_data': connections_data,
-        'pipeline_input_variables': sorted(list(all_input_vars)),
         'pipeline_global_arguments_json': json.dumps(pipeline.global_arguments or []),
+        'pipeline_input_variables': pipeline.global_arguments or [],
     }
     return render(request, 'core/pipeline_detail.html', context)
 
@@ -269,6 +257,65 @@ def node_delete(request, pk):
     node.delete()
     messages.success(request, f'Node "{node.name}" deleted successfully!')
     return redirect('pipeline_detail', pk=pipeline_pk)
+
+@login_required
+@require_POST
+def create_connection(request):
+    """
+    Create a connection by updating the target node's input_variable_mappings.
+    This replaces the old NodeConnection model approach.
+    """
+    try:
+        data = json.loads(request.body)
+        from_node_id = data.get('from_node_id')
+        output_variable = data.get('output_variable')
+        to_node_id = data.get('to_node_id')
+        input_variable = data.get('input_variable')
+        
+        # Validate inputs
+        if not all([from_node_id, output_variable, to_node_id, input_variable]):
+            return JsonResponse({
+                'success': False,
+                'error': 'Missing required fields'
+            }, status=400)
+        
+        # Get nodes and verify ownership
+        to_node = get_object_or_404(Node, pk=to_node_id, pipeline__created_by=request.user)
+        from_node = get_object_or_404(Node, pk=from_node_id, pipeline__created_by=request.user)
+        
+        # Verify nodes are in the same pipeline
+        if to_node.pipeline != from_node.pipeline:
+            return JsonResponse({
+                'success': False,
+                'error': 'Nodes must be in the same pipeline'
+            }, status=400)
+        
+        # Update input_variable_mappings
+        if not to_node.input_variable_mappings:
+            to_node.input_variable_mappings = {}
+        
+        to_node.input_variable_mappings[input_variable] = {
+            'source_node_id': str(from_node_id),
+            'source_variable': output_variable
+        }
+        
+        to_node.save()
+        
+        return JsonResponse({
+            'success': True,
+            'message': f'Connected {from_node.name}.{output_variable} to {to_node.name}.{input_variable}'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'error': 'Invalid JSON'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
 
 @login_required
 def execute_pipeline(request, pk):
@@ -427,132 +474,18 @@ def execute_pipeline_async(execution_id):
             pass  # If we can't even save the error, there's not much we can do
 
 @login_required
-def detect_outputs(request):
-    """Analyze node code and automatically detect output variables"""
-    if request.method != 'POST':
-        return JsonResponse({'error': 'Only POST method allowed'}, status=405)
-    
-    try:
-        data = json.loads(request.body)
-        code = data.get('code', '')
-        
-        if not code.strip():
-            return JsonResponse({'outputs': []})
-        
-        # Detect output variables using AST parsing
-        outputs = detect_output_variables(code)
-        
-        return JsonResponse({'outputs': outputs})
-        
-    except json.JSONDecodeError:
-        return JsonResponse({'error': 'Invalid JSON'}, status=400)
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-@login_required
 def get_pipeline_inputs(request, pk):
-    """Get input variables for a pipeline"""
+    """Get input variables for a pipeline (pipeline-level global arguments)"""
     try:
         pipeline = get_object_or_404(Pipeline, pk=pk, created_by=request.user)
-        nodes = Node.objects.filter(pipeline=pipeline).order_by('order')
-        connections = NodeConnection.objects.filter(from_node__pipeline=pipeline)
         
-        # Collect input variables that are NOT satisfied by connections (external inputs only)
-        all_input_vars = set()
-        connected_inputs = set()
-        
-        # First, find all input variables that are satisfied by connections
-        for connection in connections:
-            connected_inputs.add((connection.to_node.id, connection.to_input))
-        
-        # Then collect only unsatisfied input variables
-        for node in nodes:
-            if node.input_variables:
-                for input_var in node.input_variables:
-                    # Only include if this input is not connected from another node
-                    if (node.id, input_var) not in connected_inputs:
-                        all_input_vars.add(input_var)
-        
+        # Return only pipeline-level global arguments
         return JsonResponse({
-            'input_variables': sorted(list(all_input_vars))
+            'input_variables': pipeline.global_arguments or []
         })
         
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
-def detect_output_variables(code):
-    """Parse Python code to detect variables that could be outputs"""
-    try:
-        # Parse the code into an AST
-        tree = ast.parse(code)
-        
-        # Track variable assignments
-        assigned_vars = set()
-        imported_modules = set()
-        
-        class OutputDetector(ast.NodeVisitor):
-            def visit_Assign(self, node):
-                # Handle assignments like: x = 5, df = pd.DataFrame()
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        assigned_vars.add(target.id)
-                    elif isinstance(target, ast.Tuple) or isinstance(target, ast.List):
-                        # Handle tuple/list unpacking: a, b = func()
-                        for elt in target.elts:
-                            if isinstance(elt, ast.Name):
-                                assigned_vars.add(elt.id)
-                self.generic_visit(node)
-            
-            def visit_AugAssign(self, node):
-                # Handle augmented assignments like: x += 5
-                if isinstance(node.target, ast.Name):
-                    assigned_vars.add(node.target.id)
-                self.generic_visit(node)
-            
-            def visit_Import(self, node):
-                # Track imports to filter out module names
-                for alias in node.names:
-                    name = alias.asname if alias.asname else alias.name
-                    imported_modules.add(name.split('.')[0])
-                self.generic_visit(node)
-            
-            def visit_ImportFrom(self, node):
-                # Track from imports
-                for alias in node.names:
-                    name = alias.asname if alias.asname else alias.name
-                    imported_modules.add(name)
-                self.generic_visit(node)
-        
-        # Visit the AST to detect assignments
-        detector = OutputDetector()
-        detector.visit(tree)
-        
-        # Filter out common non-output variables
-        filtered_outputs = []
-        for var in assigned_vars:
-            # Skip private variables, modules, and common temporary variables
-            if (not var.startswith('_') and 
-                var not in imported_modules and 
-                var not in ['i', 'j', 'k', 'idx', 'index', 'temp', 'tmp', 'result']):
-                filtered_outputs.append(var)
-        
-        return sorted(filtered_outputs)
-        
-    except (SyntaxError, Exception):
-        # Fallback to regex if AST parsing fails
-        return detect_outputs_regex(code)
-
-def detect_outputs_regex(code):
-    """Fallback regex-based output detection for invalid Python syntax"""
-    # Simple regex to find variable assignments
-    pattern = r'^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*[+\-*/%&|^]?=\s*(?!=)'
-    matches = re.findall(pattern, code, re.MULTILINE)
-    
-    # Filter common non-outputs
-    filtered = [var for var in matches if not var.startswith('_') and 
-               var not in ['i', 'j', 'k', 'idx', 'index', 'temp', 'tmp']]
-    
-    return sorted(list(set(filtered)))
 
 def execute_node_code(code, context):
     """Execute user-defined code in a controlled environment"""
@@ -567,8 +500,12 @@ def execute_node_code(code, context):
     except ImportError:
         sklearn = None
     try:
-        import matplotlib.pyplot as plt
-    except ImportError:
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            warnings.filterwarnings("ignore", category=UserWarning)
+            import matplotlib.pyplot as plt
+    except (ImportError, Exception):
         plt = None
     try:
         import seaborn as sns
@@ -647,48 +584,7 @@ def execute_node_code(code, context):
                             if isinstance(artifact_ref, dict) and artifact_ref.get('_artifact'):
                                 result[artifact_name] = artifact_ref
         
-        # Collect loaded data ids from all WarpDrive instances to exclude them
-        loaded_data_ids = set()
-        for wd in warpdrive_instances:
-            if hasattr(wd, 'loaded_data_ids'):
-                loaded_data_ids.update(wd.loaded_data_ids)
-        
-        # Collect other output variables (exclude WarpDrive instances and artifacts)
-        artifact_names = set(result.keys())
-        for key, value in exec_locals.items():
-            # Skip internal variables
-            if key.startswith('_'):
-                continue
-            
-            # Skip WarpDrive instances
-            if isinstance(value, WarpDrive):
-                continue
-            
-            # Skip module imports
-            if isinstance(value, types.ModuleType):
-                continue
-            
-            # Skip variables that are already in artifacts
-            if key in artifact_names:
-                continue
-            
-            # Skip variables loaded via get_arg() by checking object id
-            if id(value) in loaded_data_ids:
-                continue
-                
-            # Skip unchanged context (use 'is' comparison to avoid pandas issues)
-            if key in context and context[key] is value:
-                continue
-            
-            # Check if this variable was modified or newly created
-            if key not in context or context[key] is not value:
-                # Try JSON serialization first
-                try:
-                    json.dumps(value)
-                    result[key] = value
-                except (TypeError, ValueError):
-                    # Non-serializable - convert to string
-                    result[key] = str(value)
+        # Only return explicitly saved artifacts, no automatic variable collection
         
         if output_logs:
             result['_output_logs'] = output_logs
@@ -728,6 +624,29 @@ def execution_detail(request, pk):
         pipeline_execution=execution
     ).order_by('node__order')
     
+    # Get all nodes for the pipeline with their positions
+    pipeline_nodes = Node.objects.filter(pipeline=execution.pipeline).order_by('order')
+    
+    # Create a mapping of node_id to node_execution for status lookup
+    node_exec_map = {str(ne.node.id): ne for ne in node_executions}
+    
+    # Generate connections from input_variable_mappings
+    connections_data = []
+    for node in pipeline_nodes:
+        if node.input_variable_mappings:
+            for target_var, mapping in node.input_variable_mappings.items():
+                source_node_id = mapping.get('node_id')
+                source_var = mapping.get('source_variable')
+                
+                # Only create visual connections for node-to-node mappings
+                if source_node_id and source_node_id != '__pipeline__' and source_var:
+                    connections_data.append({
+                        'from_node': source_node_id,
+                        'to_node': str(node.id),
+                        'from_output': source_var,
+                        'to_input': target_var,
+                    })
+    
     # Serialize JSON data properly for JavaScript
     import json
     for node_exec in node_executions:
@@ -756,6 +675,9 @@ def execution_detail(request, pk):
     context = {
         'execution': execution,
         'node_executions': node_executions,
+        'pipeline_nodes': pipeline_nodes,
+        'node_exec_map': node_exec_map,
+        'connections_json': json.dumps(connections_data),
     }
     return render(request, 'core/execution_detail.html', context)
 
@@ -793,16 +715,6 @@ def update_node_position(request):
 
 @login_required
 @require_http_methods(["GET"])
-def get_node_variables(request, pk):
-    """Get input/output variables for a node"""
-    node = get_object_or_404(Node, pk=pk, pipeline__created_by=request.user)
-    return JsonResponse({
-        'input_variables': node.input_variables,
-        'output_variables': node.output_variables,
-    })
-
-@login_required
-@require_http_methods(["GET"])
 def pipeline_status(request, pk):
     """Get current pipeline execution status"""
     pipeline = get_object_or_404(Pipeline, pk=pk, created_by=request.user)
@@ -829,57 +741,7 @@ def pipeline_status(request, pk):
     
     return JsonResponse({'execution_status': 'none', 'node_statuses': {}})
 
-@require_POST
-@login_required
-def create_connection(request):
-    """Create a connection between two nodes via AJAX"""
-    try:
-        import json
-        data = json.loads(request.body)
-        
-        from_node_id = data.get('from_node_id')
-        output_variable = data.get('output_variable')
-        to_node_id = data.get('to_node_id')
-        input_variable = data.get('input_variable')
-        
-        # Get the nodes and verify ownership
-        from_node = get_object_or_404(Node, pk=from_node_id, pipeline__created_by=request.user)
-        to_node = get_object_or_404(Node, pk=to_node_id, pipeline__created_by=request.user)
-        
-        # Verify nodes are in the same pipeline
-        if from_node.pipeline != to_node.pipeline:
-            return JsonResponse({'success': False, 'error': 'Nodes must be in the same pipeline'})
-        
-        # Verify variables exist
-        if output_variable not in (from_node.output_variables or []):
-            return JsonResponse({'success': False, 'error': f'Output variable "{output_variable}" not found in source node'})
-            
-        if input_variable not in (to_node.input_variables or []):
-            return JsonResponse({'success': False, 'error': f'Input variable "{input_variable}" not found in target node'})
-        
-        # Check if connection already exists
-        existing = NodeConnection.objects.filter(
-            from_node=from_node,
-            from_output=output_variable,
-            to_node=to_node,
-            to_input=input_variable
-        ).exists()
-        
-        if existing:
-            return JsonResponse({'success': False, 'error': 'Connection already exists'})
-        
-        # Create the connection
-        connection = NodeConnection.objects.create(
-            from_node=from_node,
-            from_output=output_variable,
-            to_node=to_node,
-            to_input=input_variable
-        )
-        
-        return JsonResponse({'success': True, 'connection_id': str(connection.pk)})
-        
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)})
+
 
 @login_required
 def get_node_code(request, pk):
@@ -891,8 +753,6 @@ def get_node_code(request, pk):
             'success': True,
             'node_name': node.name,
             'code': node.code or '# No code defined for this node',
-            'input_variables': node.input_variables or [],
-            'output_variables': node.output_variables or [],
             'description': node.description or 'No description provided'
         })
         
@@ -924,3 +784,13 @@ def pipeline_executions(request, pk):
         }
     }
     return render(request, 'core/pipeline_executions.html', context)
+
+
+@login_required
+def pipeline_list_api(request):
+    """API endpoint to list pipelines for the current user."""
+    pipelines = Pipeline.objects.filter(created_by=request.user).values(
+        'id', 'name', 'description', 'created_at'
+    ).order_by('-created_at')
+    
+    return JsonResponse(list(pipelines), safe=False)

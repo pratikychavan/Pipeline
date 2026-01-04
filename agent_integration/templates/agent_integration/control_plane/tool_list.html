@@ -1,0 +1,54 @@
+{% extends 'core/base.html' %}
+{% block title %}Tools - {{ block.super }}{% endblock %}
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2><i class="fas fa-toolbox"></i> Tool Registry</h2>
+        <div>
+            <a href="{% url 'agent_integration:cp_dashboard' %}" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left"></i> Control Plane
+            </a>
+            <a href="{% url 'agent_integration:cp_tool_create' %}" class="btn btn-success">
+                <i class="fas fa-plus"></i> Register Tool
+            </a>
+        </div>
+    </div>
+    {% if tools %}
+    <div class="table-responsive">
+        <table class="table table-striped table-hover">
+            <thead class="table-dark">
+                <tr><th>Name</th><th>Type</th><th>Pipeline</th><th>Enabled</th><th>Agents</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+                {% for tool in tools %}
+                <tr>
+                    <td><a href="{% url 'agent_integration:cp_tool_detail' tool.id %}"><strong>{{ tool.name }}</strong></a></td>
+                    <td><span class="badge bg-secondary">{{ tool.executor_type }}</span></td>
+                    <td>{% if tool.pipeline %}{{ tool.pipeline.name }}{% else %}-{% endif %}</td>
+                    <td>
+                        {% if tool.is_enabled %}
+                            <span class="badge bg-success">ENABLED</span>
+                        {% else %}
+                            <span class="badge bg-secondary">DISABLED</span>
+                        {% endif %}
+                    </td>
+                    <td><span class="badge bg-info">{{ tool.agent_count }}</span></td>
+                    <td>
+                        <div class="btn-group btn-group-sm">
+                            <a href="{% url 'agent_integration:cp_tool_detail' tool.id %}" class="btn btn-outline-primary"><i class="fas fa-eye"></i></a>
+                            <a href="{% url 'agent_integration:cp_tool_edit' tool.id %}" class="btn btn-outline-secondary"><i class="fas fa-edit"></i></a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="alert alert-secondary text-center">
+        <h4>No Tools Registered</h4>
+        <a href="{% url 'agent_integration:cp_tool_create' %}" class="btn btn-success"><i class="fas fa-plus"></i> Register First Tool</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

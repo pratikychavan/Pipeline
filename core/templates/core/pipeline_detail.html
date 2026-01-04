@@ -59,12 +59,18 @@
             <a href="{% url 'pipeline_executions' pipeline.pk %}" class="btn btn-outline-info">
                 <i class="fas fa-history"></i> History
             </a>
-            <a href="{% url 'pipeline_delete' pipeline.pk %}" class="btn btn-outline-danger">
-                <i class="fas fa-trash"></i> Delete
-            </a>
+            <form method="post" action="{% url 'agent_integration:start_agent_run_ui' pipeline.pk %}" style="display:inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-outline-warning" title="Start Agent-Orchestrated Execution">
+                    <i class="fas fa-robot"></i> Agent Run
+                </button>
+            </form>
             <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#executeModal">
                 <i class="fas fa-play"></i> Execute
             </button>
+            <a href="{% url 'pipeline_delete' pipeline.pk %}" class="btn btn-outline-danger">
+                <i class="fas fa-trash"></i> Delete
+            </a>
         </div>
     </div>
 
@@ -97,16 +103,13 @@
                             <svg id="connectionsSvg" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1;">
                             </svg>
                         {% for node in nodes %}
-                            <div class="node status-{{ node.status }}" 
+                            <div class="node" 
                                  id="node-{{ node.pk }}"
                                  style="left: {{ node.position_x|default:'100' }}px; top: {{ node.position_y|default:'100' }}px;"
                                  data-node-id="{{ node.pk }}">
                                 <div class="node-header" style="display: flex; justify-content: space-between; align-items: center;">
                                     <div>
                                         <div class="node-title">{{ node.name }}</div>
-                                        <div class="node-status status-{{ node.status }}">
-                                            {{ node.get_status_display }}
-                                        </div>
                                     </div>
                                     <button class="btn btn-sm btn-link collapse-btn" 
                                             onclick="toggleNodeCollapse('{{ node.pk }}')" 
@@ -114,42 +117,10 @@
                                         <i class="fas fa-chevron-up"></i>
                                     </button>
                                 </div>
-                                <!-- Collapsed view - minimal variable display -->
-                                <div class="node-collapsed-vars" id="collapsed-{{ node.pk }}" style="display: none;">
-                                    {% if node.input_variables %}
-                                        {% for var in node.input_variables %}
-                                            <span class="badge badge-light input-var collapsed-var" data-var="{{ var }}" title="Input: {{ var }}">{{ var }}</span>
-                                        {% endfor %}
-                                    {% endif %}
-                                    {% if node.output_variables %}
-                                        {% for var in node.output_variables %}
-                                            <span class="badge badge-light output-var collapsed-var" data-var="{{ var }}" title="Output: {{ var }}">{{ var }}</span>
-                                        {% endfor %}
-                                    {% endif %}
-                                </div>
                                 <div class="node-content" id="content-{{ node.pk }}">
                                     <div class="mt-2">
-                                        <small class="text-dark">
-                                            {% if node.input_variables %}
-                                                <div class="mb-1"><i class="fas fa-arrow-right text-success"></i> Inputs:</div>
-                                                <div class="mb-2">
-                                                    {% for var in node.input_variables %}
-                                                        <div class="mb-1">
-                                                            <span class="badge badge-light input-var" data-var="{{ var }}" style="color: #000;">{{ var }}</span>
-                                                        </div>
-                                                    {% endfor %}
-                                                </div>
-                                            {% endif %}
-                                            {% if node.output_variables %}
-                                                <div class="mb-1"><i class="fas fa-arrow-left text-primary"></i> Outputs:</div>
-                                                <div>
-                                                    {% for var in node.output_variables %}
-                                                        <div class="mb-1">
-                                                            <span class="badge badge-light output-var" data-var="{{ var }}" style="color: #000;">{{ var }}</span>
-                                                        </div>
-                                                    {% endfor %}
-                                                </div>
-                                            {% endif %}
+                                        <small class="text-muted">
+                                            {{ node.description|default:"No description" }}
                                         </small>
                                     </div>
                                     <div class="mt-2">
@@ -335,19 +306,6 @@
                     let codeContent = '';
                     if (data.description && data.description !== 'No description provided') {
                         codeContent += `# Description: ${data.description}\n\n`;
-                    }
-                    
-                    if (data.input_variables && data.input_variables.length > 0) {
-                        codeContent += `# Input Variables: ${data.input_variables.join(', ')}\n`;
-                    }
-                    
-                    if (data.output_variables && data.output_variables.length > 0) {
-                        codeContent += `# Output Variables: ${data.output_variables.join(', ')}\n`;
-                    }
-                    
-                    if ((data.input_variables && data.input_variables.length > 0) || 
-                        (data.output_variables && data.output_variables.length > 0)) {
-                        codeContent += '\n';
                     }
                     
                     codeContent += data.code;

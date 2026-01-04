@@ -37,7 +37,6 @@ class LocalExecutionBackend(ExecutionBackend):
     def execute_node(self, node: Node, context: Dict[str, Any], 
                     execution: PipelineExecution) -> Dict[str, Any]:
         """Execute node locally using the existing execution logic."""
-        from .warpdrive import NodeExecutionContext
         from ..views import execute_node_code
         
         # Execute with context
@@ -90,14 +89,8 @@ class DockerExecutionBackend(ExecutionBackend):
         import subprocess
         import tempfile
         
-        # Get connections for this node
-        from ..models import NodeConnection
-        connections = list(NodeConnection.objects.filter(
-            from_node__pipeline=node.pipeline
-        ))
-        
         # Prepare execution script with WarpDrive support
-        script = self._prepare_container_script(node, context, execution, connections)
+        script = self._prepare_container_script(node, context, execution)
         
         # Create temporary file for the script
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
@@ -134,19 +127,8 @@ class DockerExecutionBackend(ExecutionBackend):
             os.unlink(script_file)
     
     def _prepare_container_script(self, node: Node, context: Dict[str, Any],
-                                 execution: PipelineExecution, 
-                                 connections: list) -> str:
+                                 execution: PipelineExecution) -> str:
         """Prepare Python script to run in container."""
-        
-        # Serialize connections and context
-        connections_data = []
-        for conn in connections:
-            connections_data.append({
-                'from_node_id': str(conn.from_node.id),
-                'to_node_id': str(conn.to_node.id),
-                'from_output': conn.from_output,
-                'to_input': conn.to_input
-            })
         
         script = f'''
 import os
@@ -162,7 +144,6 @@ class WarpDrive:
         self.node_id = node_id or os.environ.get('WARPDRIVE_NODE_ID')
         self.execution_id = execution_id or os.environ.get('WARPDRIVE_EXECUTION_ID')
         self.context_data = {json.dumps(context)}
-        self.connections = {json.dumps(connections_data)}
         self.artifact_storage_dir = f'/artifacts/{{self.execution_id}}'
         os.makedirs(self.artifact_storage_dir, exist_ok=True)
         self.caller_globals = globals()
@@ -170,22 +151,18 @@ class WarpDrive:
         self.loaded_vars = set()
         
     def get_arg(self, variable_name):
-        """Get input variable through connections."""
-        # Find connection
-        for conn in self.connections:
-            if conn['to_node_id'] == self.node_id and conn['to_input'] == variable_name:
-                source_var = conn['from_output']
-                if source_var in self.context_data:
-                    value = self.context_data[source_var]
-                    
-                    # Load artifact if needed
-                    if isinstance(value, dict) and value.get('_artifact'):
-                        file_path = value.get('_file')
-                        if file_path:
-                            value = self._load_artifact(file_path)
-                    
-                    self.loaded_vars.add(variable_name)
-                    return value
+        """Get input variable from context."""
+        if variable_name in self.context_data:
+            value = self.context_data[variable_name]
+            
+            # Load artifact if needed
+            if isinstance(value, dict) and value.get('_artifact'):
+                file_path = value.get('_file')
+                if file_path:
+                    value = self._load_artifact(file_path)
+            
+            self.loaded_vars.add(variable_name)
+            return value
         
         raise ValueError(f"Input variable '{{variable_name}}' not found")
     

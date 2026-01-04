@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib.auth.models import User
-from .models import Pipeline, Node, NodeConnection
+from .models import Pipeline, Node
 import json
 
 class PipelineForm(forms.ModelForm):
@@ -81,25 +81,6 @@ class NodeForm(forms.ModelForm):
         if commit:
             instance.save()
         return instance
-
-class NodeConnectionForm(forms.ModelForm):
-    class Meta:
-        model = NodeConnection
-        fields = ['from_node', 'to_node', 'from_output', 'to_input']
-        widgets = {
-            'from_node': forms.Select(attrs={'class': 'form-control'}),
-            'to_node': forms.Select(attrs={'class': 'form-control'}),
-            'from_output': forms.Select(attrs={'class': 'form-control'}),
-            'to_input': forms.Select(attrs={'class': 'form-control'}),
-        }
-    
-    def __init__(self, *args, **kwargs):
-        pipeline = kwargs.pop('pipeline', None)
-        super().__init__(*args, **kwargs)
-        
-        if pipeline:
-            self.fields['from_node'].queryset = Node.objects.filter(pipeline=pipeline)
-            self.fields['to_node'].queryset = Node.objects.filter(pipeline=pipeline)
 
 class CodeExecutionForm(forms.Form):
     """Form for executing pipeline with initial parameters"""

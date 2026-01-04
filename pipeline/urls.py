@@ -23,4 +23,5 @@ urlpatterns = [
     path('accounts/login/', auth_views.LoginView.as_view(template_name='admin/login.html')),
     path('accounts/logout/', auth_views.LogoutView.as_view(next_page='/accounts/login/'), name='logout'),
     path('', include('core.urls')),  # Main pipeline interface at root
+    path('agent/', include('agent_integration.urls', namespace='agent_integration')),  # Agent integration URLs
 ]

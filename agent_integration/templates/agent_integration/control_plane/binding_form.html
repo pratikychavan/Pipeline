@@ -1,0 +1,55 @@
+{% extends 'core/base.html' %}
+{% block title %}{{ action }} Condition Binding - {{ block.super }}{% endblock %}
+{% block content %}
+<div class="container-fluid p-4">
+    <h2>{{ action }} Condition Binding</h2>
+    <form method="post" class="mt-3">
+        {% csrf_token %}
+        {{ form.agent }}
+        <div class="card">
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Condition</label>
+                    {{ form.condition }}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Evaluation Point</label>
+                    {{ form.evaluation_point }}
+                </div>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">On True Action</label>
+                        {{ form.on_true_action }}
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">On False Action</label>
+                        {{ form.on_false_action }}
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Max Evaluations</label>
+                        {{ form.max_evaluations }}
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Priority</label>
+                        {{ form.priority }}
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="form-check mt-4">
+                            {{ form.is_enabled }}
+                            <label class="form-check-label">Enabled</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Parameters (JSON)</label>
+                    {{ form.parameters_json }}
+                </div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-warning mt-3"><i class="fas fa-save"></i> Save</button>
+        <a href="{% if binding %}{% url 'agent_integration:cp_agent_detail' binding.agent.id %}{% elif agent %}{% url 'agent_integration:cp_agent_detail' agent.id %}{% endif %}" class="btn btn-secondary mt-3">Cancel</a>
+    </form>
+</div>
+{% endblock %}
