@@ -1,0 +1,30 @@
+name: "Priority-Based Data Processor"
+objective: "Process data pipeline with priority-based execution"
+description: |
+  This agent executes pipeline tools based on priority metadata.
+  Higher priority tools (lower priority numbers) execute first.
+  Useful for ensuring critical operations happen early.
+
+allowed_tools:
+  - validate_data
+  - transform_data
+  - analyze_data
+  - generate_report
+
+config:
+  model: "gpt-4o-mini"
+  temperature: 0.3
+  max_steps: 50
+  max_tokens: 2000
+  enable_human_intervention: true
+  fail_on_node_failure: true
+  timeout_seconds: 300
+
+constraints:
+  max_execution_time_seconds: 300
+  max_cost_usd: 0.50
+
+metadata:
+  version: "1.0"
+  author: "example_user"
+  created_at: "2026-01-04"

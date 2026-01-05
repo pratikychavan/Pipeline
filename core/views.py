@@ -18,7 +18,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from .models import Pipeline, Node, PipelineExecution, NodeExecution
+from .models import Pipeline, Node, PipelineExecution, NodeExecution, AgentWorkspace
 from .forms import PipelineForm, NodeForm, CodeExecutionForm
 from .execution_engine import execute_pipeline_async
 from .execution import get_execution_backend
@@ -322,6 +322,9 @@ def execute_pipeline(request, pk):
     pipeline = get_object_or_404(Pipeline, pk=pk, created_by=request.user)
     
     if request.method == 'POST':
+        # Get execution mode
+        execution_mode = request.POST.get('execution_mode', 'deterministic')
+        
         # Collect all input variables from the form
         initial_data = {}
         for key in request.POST:
@@ -349,15 +352,58 @@ def execute_pipeline(request, pk):
             context_data=initial_data
         )
         
-        # Start execution in background
-        thread = threading.Thread(
-            target=execute_pipeline_async,
-            args=(execution.id,)
-        )
-        thread.daemon = True
-        thread.start()
+        # Handle execution based on mode
+        if execution_mode == 'agent':
+            # Agent-controlled execution
+            agent_profile_id = request.POST.get('agent_profile', '').strip()
+            
+            # Build agent config
+            agent_config = {
+                'model': request.POST.get('agent_model', 'gpt-4o-mini'),
+                'temperature': float(request.POST.get('agent_temperature', 0.3)),
+                'max_steps': int(request.POST.get('agent_max_steps', 100)),
+                'fail_on_node_failure': request.POST.get('fail_on_node_failure') == 'on',
+            }
+            
+            # If agent profile is selected, use its configuration
+            if agent_profile_id:
+                from agent_integration.control_plane_models import AgentProfile
+                try:
+                    agent_profile = AgentProfile.objects.get(
+                        pk=agent_profile_id, 
+                        status='active',
+                        validation_status='valid'
+                    )
+                    agent_config.update({
+                        'agent_profile_id': str(agent_profile.id),
+                        'model': agent_profile.llm_config.get('model', agent_config['model']),
+                        'temperature': agent_profile.llm_config.get('temperature', agent_config['temperature']),
+                        'provider': agent_profile.llm_config.get('provider', 'openai'),
+                    })
+                    messages.info(request, f'Using agent profile: {agent_profile.name}')
+                except AgentProfile.DoesNotExist:
+                    messages.warning(request, 'Selected agent profile not found. Using default configuration.')
+            
+            # Start agent execution in background
+            from agent_integration.runtime.execution_loop import start_agent_execution
+            thread = threading.Thread(
+                target=lambda: start_agent_execution(execution, agent_config),
+                daemon=True
+            )
+            thread.start()
+            
+            messages.success(request, f'Agent-controlled execution started! Mode: {agent_config["model"]}')
+        else:
+            # Deterministic execution (original behavior)
+            thread = threading.Thread(
+                target=execute_pipeline_async,
+                args=(execution.id,)
+            )
+            thread.daemon = True
+            thread.start()
+            
+            messages.success(request, 'Deterministic execution started!')
         
-        messages.success(request, 'Pipeline execution started!')
         return redirect('execution_detail', pk=execution.pk)
     
     return redirect('pipeline_detail', pk=pk)
@@ -624,6 +670,22 @@ def execution_detail(request, pk):
         pipeline_execution=execution
     ).order_by('node__order')
     
+    # Check if this is an agent-controlled run
+    agent_run = None
+    agent_decisions = []
+    execution_mode = 'deterministic'
+    
+    try:
+        from agent_integration.models import AgentRun, AgentDecision
+        agent_run = AgentRun.objects.filter(pipeline_execution=execution).first()
+        if agent_run:
+            execution_mode = 'agent'
+            agent_decisions = AgentDecision.objects.filter(
+                agent_run=agent_run
+            ).order_by('step_number')
+    except:
+        pass  # Agent integration not available or no agent run
+    
     # Get all nodes for the pipeline with their positions
     pipeline_nodes = Node.objects.filter(pipeline=execution.pipeline).order_by('order')
     
@@ -678,6 +740,9 @@ def execution_detail(request, pk):
         'pipeline_nodes': pipeline_nodes,
         'node_exec_map': node_exec_map,
         'connections_json': json.dumps(connections_data),
+        'execution_mode': execution_mode,
+        'agent_run': agent_run,
+        'agent_decisions': agent_decisions,
     }
     return render(request, 'core/execution_detail.html', context)
 
@@ -686,6 +751,19 @@ def execution_list(request):
     executions = PipelineExecution.objects.filter(
         started_by=request.user
     ).order_by('-started_at')[:50]  # Show last 50 executions
+    
+    # Check which executions have agent runs
+    try:
+        from agent_integration.models import AgentRun
+        agent_run_ids = set(AgentRun.objects.filter(
+            pipeline_execution__in=executions
+        ).values_list('pipeline_execution_id', flat=True))
+        
+        for execution in executions:
+            execution.has_agent_run = execution.id in agent_run_ids
+    except:
+        for execution in executions:
+            execution.has_agent_run = False
     
     context = {
         'executions': executions,
@@ -794,3 +872,189 @@ def pipeline_list_api(request):
     ).order_by('-created_at')
     
     return JsonResponse(list(pipelines), safe=False)
+
+
+# ============================================================================
+# AGENT WORKSPACE VIEWS
+# ============================================================================
+
+@login_required
+def agent_workspace_list(request):
+    """List all agent workspaces for the current user"""
+    workspaces = AgentWorkspace.objects.filter(created_by=request.user)
+    
+    context = {
+        'workspaces': workspaces,
+    }
+    return render(request, 'core/agent_workspace_list.html', context)
+
+
+@login_required
+def agent_workspace_create(request):
+    """Create a new agent workspace"""
+    if request.method == 'POST':
+        name = request.POST.get('name', '').strip()
+        description = request.POST.get('description', '').strip()
+        pipeline_id = request.POST.get('pipeline', '').strip()
+        
+        if not name:
+            messages.error(request, 'Workspace name is required')
+            return redirect('agent_workspace_list')
+        
+        # Check if workspace with same name exists for this user
+        if AgentWorkspace.objects.filter(name=name, created_by=request.user).exists():
+            messages.error(request, f'Workspace "{name}" already exists')
+            return redirect('agent_workspace_list')
+        
+        # Create workspace with default template
+        workspace = AgentWorkspace.objects.create(
+            name=name,
+            description=description,
+            created_by=request.user,
+            pipeline_id=pipeline_id if pipeline_id else None,
+        )
+        
+        messages.success(request, f'Workspace "{name}" created successfully')
+        return redirect('agent_workspace_detail', pk=workspace.id)
+    
+    # GET request - show form
+    pipelines = Pipeline.objects.filter(created_by=request.user, is_active=True)
+    context = {
+        'pipelines': pipelines,
+    }
+    return render(request, 'core/agent_workspace_create.html', context)
+
+
+@login_required
+def agent_workspace_detail(request, pk):
+    """View and edit agent workspace files"""
+    workspace = get_object_or_404(AgentWorkspace, pk=pk, created_by=request.user)
+    
+    # Get SDK reference data
+    from agent_integration.user_workspace import (
+        ALLOWED_STDLIB_MODULES,
+        ALLOWED_THIRD_PARTY,
+        FORBIDDEN_MODULES
+    )
+    
+    context = {
+        'workspace': workspace,
+        'allowed_stdlib': sorted(ALLOWED_STDLIB_MODULES),
+        'allowed_third_party': sorted(ALLOWED_THIRD_PARTY),
+        'forbidden_modules': sorted(FORBIDDEN_MODULES),
+    }
+    return render(request, 'core/agent_workspace_detail.html', context)
+
+
+@login_required
+@require_POST
+def agent_workspace_save(request, pk):
+    """Save workspace files"""
+    workspace = get_object_or_404(AgentWorkspace, pk=pk, created_by=request.user)
+    
+    try:
+        # Get file contents from POST
+        agent_code = request.POST.get('agent_code', '')
+        agent_config = request.POST.get('agent_config', '')
+        requirements = request.POST.get('requirements', '')
+        
+        # Save files
+        workspace.agent_code = agent_code
+        workspace.agent_config = agent_config
+        workspace.requirements = requirements
+        workspace.validation_status = 'pending'  # Reset validation status
+        workspace.save()
+        
+        return JsonResponse({
+            'success': True,
+            'message': 'Workspace saved successfully'
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=400)
+
+
+@login_required
+@require_POST
+def agent_workspace_validate(request, pk):
+    """Validate agent workspace using workspace loader"""
+    workspace = get_object_or_404(AgentWorkspace, pk=pk, created_by=request.user)
+    
+    try:
+        from agent_integration.user_workspace import load_user_workspace
+        from pathlib import Path
+        import tempfile
+        import os
+        
+        # Create temporary directory for validation
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_path = Path(temp_dir)
+            
+            # Write files to temp directory
+            agent_py = workspace_path / 'agent.py'
+            agent_py.write_text(workspace.agent_code)
+            
+            agent_yaml = workspace_path / 'agent.yaml'
+            agent_yaml.write_text(workspace.agent_config)
+            
+            if workspace.requirements:
+                requirements_txt = workspace_path / 'requirements.txt'
+                requirements_txt.write_text(workspace.requirements)
+            
+            # Attempt to load workspace (this validates everything)
+            loaded = load_user_workspace(workspace_path)
+            
+            # Update workspace with validation success
+            workspace.validation_status = 'valid'
+            workspace.validation_errors = []
+            workspace.planner_class_name = loaded.planner_class_name
+            workspace.last_validated_at = datetime.now(timezone.utc)
+            
+            # Try to detect planner type
+            if 'Deterministic' in loaded.planner_class_name:
+                workspace.planner_type = 'deterministic'
+            elif 'LLM' in loaded.planner_class_name:
+                workspace.planner_type = 'llm'
+            else:
+                workspace.planner_type = 'custom'
+            
+            workspace.save()
+            
+            return JsonResponse({
+                'success': True,
+                'message': 'Validation passed',
+                'planner_class': loaded.planner_class_name,
+                'agent_name': loaded.agent_definition.name,
+            })
+        
+    except Exception as e:
+        # Validation failed - store error details
+        error_message = str(e)
+        error_lines = error_message.split('\n')
+        
+        workspace.validation_status = 'invalid'
+        workspace.validation_errors = error_lines
+        workspace.last_validated_at = datetime.now(timezone.utc)
+        workspace.save()
+        
+        return JsonResponse({
+            'success': False,
+            'error': error_message,
+            'errors': error_lines
+        }, status=400)
+
+
+@login_required
+@require_POST
+def agent_workspace_delete(request, pk):
+    """Delete agent workspace"""
+    workspace = get_object_or_404(AgentWorkspace, pk=pk, created_by=request.user)
+    
+    workspace_name = workspace.name
+    workspace.delete()
+    
+    messages.success(request, f'Workspace "{workspace_name}" deleted')
+    return redirect('agent_workspace_list')

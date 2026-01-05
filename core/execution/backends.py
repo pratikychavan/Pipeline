@@ -50,19 +50,28 @@ class LocalExecutionBackend(ExecutionBackend):
                 if source_var and source_var in context:
                     node_context[var_name] = context[source_var]
         
+        # Set up artifacts directory for this execution using MEDIA_ROOT
+        import os
+        from django.conf import settings
+        execution_artifacts_dir = os.path.join(
+            settings.MEDIA_ROOT,
+            'artifacts',
+            str(execution.id)
+        )
+        os.makedirs(execution_artifacts_dir, exist_ok=True)
+        
+        # Set environment variables for WarpDrive to use
+        os.environ['WARPDRIVE_NODE_ID'] = str(node.id)
+        os.environ['WARPDRIVE_EXECUTION_ID'] = str(execution.id)
+        
         # Add execution metadata for WarpDrive initialization
-        # Note: We no longer pass connections, WarpDrive will use context_data directly
         node_context['__warpdrive_context__'] = {
             'node_id': str(node.id),
             'execution_id': str(execution.id),
+            'artifacts_dir': execution_artifacts_dir,
             'context_data': node_context,  # Pass the mapped context
             'input_variable_mappings': node.input_variable_mappings or {}
         }
-        
-        # Also set environment variables for container-based execution
-        import os
-        os.environ['WARPDRIVE_NODE_ID'] = str(node.id)
-        os.environ['WARPDRIVE_EXECUTION_ID'] = str(execution.id)
         
         # Execute the code directly (user creates WarpDrive if needed)
         outputs = execute_node_code(node.code, node_context)

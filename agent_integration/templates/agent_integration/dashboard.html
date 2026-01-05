@@ -252,10 +252,10 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(data => {
             if (data && data.agents) {
                 data.agents.forEach(agent => {
-                    if (agent.status === 'active') {
+                    if (agent.status === 'active' && agent.validation_status === 'valid') {
                         const option = document.createElement('option');
                         option.value = agent.id;
-                        option.textContent = `${agent.name} (${agent.llm_config.model})`;
+                        option.textContent = `${agent.name}`;
                         agentSelect.appendChild(option);
                     }
                 });

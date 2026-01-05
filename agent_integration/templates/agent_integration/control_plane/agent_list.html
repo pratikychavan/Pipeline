@@ -10,8 +10,8 @@
             <a href="{% url 'agent_integration:cp_dashboard' %}" class="btn btn-outline-secondary">
                 <i class="fas fa-arrow-left"></i> Control Plane
             </a>
-            <a href="{% url 'agent_integration:cp_agent_create' %}" class="btn btn-primary">
-                <i class="fas fa-plus"></i> Create Agent
+            <a href="{% url 'agent_integration:cp_agent_create_from_workspace' %}" class="btn btn-primary">
+                <i class="fas fa-link"></i> Bind Workspace
             </a>
         </div>
     </div>
@@ -42,6 +42,8 @@
             <thead class="table-dark">
                 <tr>
                     <th>Name</th>
+                    <th>Source Workspace</th>
+                    <th>Validation</th>
                     <th>Status</th>
                     <th>Model</th>
                     <th>Max Steps</th>
@@ -60,6 +62,26 @@
                         </a>
                     </td>
                     <td>
+                        {% if agent.workspace %}
+                            <a href="{% url 'agent_workspace_detail' agent.workspace.id %}" class="text-decoration-none" title="Edit in Workspace">
+                                <i class="fas fa-folder"></i> {{ agent.workspace.name }}
+                            </a>
+                        {% else %}
+                            <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if agent.validation_status == 'valid' %}
+                            <span class="badge bg-success">Valid</span>
+                        {% elif agent.validation_status == 'invalid' %}
+                            <span class="badge bg-danger">Invalid</span>
+                        {% elif agent.validation_status == 'pending' %}
+                            <span class="badge bg-warning text-dark">Pending</span>
+                        {% else %}
+                            <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
                         <span class="badge {% if agent.status == 'active' %}bg-success{% elif agent.status == 'draft' %}bg-secondary{% else %}bg-dark{% endif %}">
                             {{ agent.status|upper }}
                         </span>
@@ -74,9 +96,11 @@
                             <a href="{% url 'agent_integration:cp_agent_detail' agent.id %}" class="btn btn-outline-primary" title="View">
                                 <i class="fas fa-eye"></i>
                             </a>
-                            <a href="{% url 'agent_integration:cp_agent_edit' agent.id %}" class="btn btn-outline-secondary" title="Edit">
+                            {% if agent.workspace %}
+                            <a href="{% url 'agent_workspace_detail' agent.workspace.id %}" class="btn btn-outline-secondary" title="Edit in Workspace">
                                 <i class="fas fa-edit"></i>
                             </a>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>
@@ -88,9 +112,9 @@
     <div class="alert alert-secondary text-center">
         <i class="fas fa-robot fa-3x mb-3"></i>
         <h4>No Agent Profiles</h4>
-        <p>Create an agent profile to get started with agent orchestration.</p>
-        <a href="{% url 'agent_integration:cp_agent_create' %}" class="btn btn-primary">
-            <i class="fas fa-plus"></i> Create First Agent
+        <p>Bind an Agent Workspace to the Control Plane to begin governance and execution control.</p>
+        <a href="{% url 'agent_integration:cp_agent_create_from_workspace' %}" class="btn btn-primary">
+            <i class="fas fa-link"></i> Bind Workspace
         </a>
     </div>
     {% endif %}

@@ -1,0 +1,25 @@
+name: "Conditional Data Processor"
+objective: "Process data with conditional branching based on validation results"
+description: |
+  This agent validates input data first, then conditionally processes
+  based on validation results. If validation fails, human intervention
+  is requested.
+
+allowed_tools:
+  - validate_input
+  - process_data
+  - generate_report
+
+config:
+  model: "gpt-4o-mini"
+  temperature: 0.2
+  max_steps: 20
+  enable_human_intervention: true
+  fail_on_node_failure: false  # Continue to allow human intervention
+
+constraints:
+  max_execution_time_seconds: 180
+
+metadata:
+  version: "1.0"
+  pattern: "validation_gating"

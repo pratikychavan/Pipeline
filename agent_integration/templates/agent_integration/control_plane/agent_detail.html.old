@@ -1,0 +1,204 @@
+{% extends 'core/base.html' %}
+
+{% block title %}{{ agent.name }} - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>
+            <i class="fas fa-robot"></i> {{ agent.name }}
+            <span class="badge {% if agent.status == 'active' %}bg-success{% elif agent.status == 'draft' %}bg-secondary{% else %}bg-dark{% endif %}">
+                {{ agent.status|upper }}
+            </span>
+        </h2>
+        <div>
+            <a href="{% url 'agent_integration:cp_agent_list' %}" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left"></i> Back to List
+            </a>
+            <a href="{% url 'agent_integration:cp_agent_edit' agent.id %}" class="btn btn-primary">
+                <i class="fas fa-edit"></i> Edit
+            </a>
+            {% if agent.status == 'draft' %}
+            <form method="post" action="{% url 'agent_integration:cp_agent_activate' agent.id %}" style="display:inline;" onsubmit="return confirm('Activate this agent?');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-success">
+                    <i class="fas fa-check"></i> Activate
+                </button>
+            </form>
+            {% elif agent.status == 'active' %}
+            <form method="post" action="{% url 'agent_integration:cp_agent_deactivate' agent.id %}" style="display:inline;" onsubmit="return confirm('Deactivate and archive this agent?');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-warning">
+                    <i class="fas fa-archive"></i> Deactivate
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Overview -->
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Configuration</h5>
+                </div>
+                <div class="card-body">
+                    <p class="card-text">{{ agent.description|default:"No description provided" }}</p>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <p><strong>Model:</strong> <code>{{ agent.llm_model }}</code></p>
+                            <p><strong>Temperature:</strong> {{ agent.llm_temperature }}</p>
+                            <p><strong>Max Steps:</strong> {{ agent.max_steps }}</p>
+                        </div>
+                        <div class="col-md-6">
+                            <p><strong>Max Retries:</strong> {{ agent.max_retries }}</p>
+                            <p><strong>Human Approval:</strong> {% if agent.require_human_approval %}<span class="badge bg-warning">Required</span>{% else %}<span class="badge bg-secondary">Not Required</span>{% endif %}</p>
+                            <p><strong>Created:</strong> {{ agent.created_at|date:"M d, Y H:i" }}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Statistics</h5>
+                </div>
+                <div class="card-body text-center">
+                    <h3>{{ agent.tool_count }}</h3>
+                    <p class="text-muted">Registered Tools</p>
+                    <h3>{{ agent.condition_count }}</h3>
+                    <p class="text-muted">Bound Conditions</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tool Mappings -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="fas fa-toolbox"></i> Tool Mappings</h5>
+            <a href="{% url 'agent_integration:cp_mapping_create' agent.id %}" class="btn btn-sm btn-success">
+                <i class="fas fa-plus"></i> Add Tool
+            </a>
+        </div>
+        <div class="card-body p-0">
+            {% if tool_mappings %}
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Tool Name</th>
+                            <th>Type</th>
+                            <th>Allowed</th>
+                            <th>Max Calls</th>
+                            <th>Priority</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for mapping in tool_mappings %}
+                        <tr>
+                            <td><a href="{% url 'agent_integration:cp_tool_detail' mapping.tool.id %}">{{ mapping.tool.name }}</a></td>
+                            <td><span class="badge bg-secondary">{{ mapping.tool.executor_type }}</span></td>
+                            <td>
+                                {% if mapping.is_allowed %}
+                                    <span class="badge bg-success">Yes</span>
+                                {% else %}
+                                    <span class="badge bg-danger">No</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ mapping.max_calls|default:"Unlimited" }}</td>
+                            <td>{{ mapping.priority }}</td>
+                            <td>
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{% url 'agent_integration:cp_mapping_edit' mapping.id %}" class="btn btn-outline-primary btn-sm">
+                                        <i class="fas fa-edit"></i>
+                                    </a>
+                                    <form method="post" action="{% url 'agent_integration:cp_mapping_delete' mapping.id %}" style="display:inline;" onsubmit="return confirm('Remove this tool?');">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-outline-danger btn-sm">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="p-3 text-center text-muted">
+                No tools mapped yet. <a href="{% url 'agent_integration:cp_mapping_create' agent.id %}">Add a tool</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Condition Bindings -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="fas fa-code-branch"></i> Condition Bindings</h5>
+            <a href="{% url 'agent_integration:cp_binding_create' agent.id %}" class="btn btn-sm btn-warning">
+                <i class="fas fa-plus"></i> Add Condition
+            </a>
+        </div>
+        <div class="card-body p-0">
+            {% if condition_bindings %}
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Condition Name</th>
+                            <th>Evaluation Point</th>
+                            <th>On True</th>
+                            <th>On False</th>
+                            <th>Enabled</th>
+                            <th>Priority</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for binding in condition_bindings %}
+                        <tr>
+                            <td><a href="{% url 'agent_integration:cp_condition_detail' binding.condition.id %}">{{ binding.condition.name }}</a></td>
+                            <td><span class="badge bg-info">{{ binding.evaluation_point }}</span></td>
+                            <td>{{ binding.on_true_action }}</td>
+                            <td>{{ binding.on_false_action }}</td>
+                            <td>
+                                {% if binding.is_enabled %}
+                                    <span class="badge bg-success">Yes</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">No</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ binding.priority }}</td>
+                            <td>
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{% url 'agent_integration:cp_binding_edit' binding.id %}" class="btn btn-outline-primary btn-sm">
+                                        <i class="fas fa-edit"></i>
+                                    </a>
+                                    <form method="post" action="{% url 'agent_integration:cp_binding_delete' binding.id %}" style="display:inline;" onsubmit="return confirm('Remove this condition?');">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-outline-danger btn-sm">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="p-3 text-center text-muted">
+                No conditions bound yet. <a href="{% url 'agent_integration:cp_binding_create' agent.id %}">Add a condition</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

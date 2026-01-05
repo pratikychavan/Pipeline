@@ -1,0 +1,85 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Bind Workspace to Control Plane{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-lg-8 offset-lg-2">
+            <h2><i class="fas fa-link"></i> Bind Workspace to Control Plane</h2>
+            
+            <div class="alert alert-info mt-3">
+                <h5><i class="fas fa-info-circle"></i> About Workspace Binding</h5>
+                <p>
+                    Agent Workspaces contain the canonical source of agent logic (agent.py + agent.yaml).
+                    The Control Plane provides <strong>governance</strong>: validation, activation, tool binding, and execution control.
+                </p>
+                <p class="mb-0">
+                    <strong>What this does:</strong> Creates an Agent Profile linked to a workspace for governance and execution.
+                </p>
+            </div>
+
+            <form method="post" class="mt-4">
+                {% csrf_token %}
+                
+                <div class="mb-3">
+                    <label for="workspace" class="form-label">Select Workspace <span class="text-danger">*</span></label>
+                    <select class="form-select" id="workspace" name="workspace" required>
+                        <option value="">-- Choose a valid workspace --</option>
+                        {% for workspace in workspaces %}
+                            <option value="{{ workspace.id }}">
+                                {{ workspace.name }} 
+                                {% if workspace.planner_class_name %}
+                                    ({{ workspace.planner_class_name }})
+                                {% endif %}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <small class="form-text text-muted">
+                        Only validated workspaces that aren't already bound are shown.
+                        <a href="{% url 'agent_workspace_list' %}" target="_blank">Manage workspaces</a>
+                    </small>
+                </div>
+
+                <div class="mb-3">
+                    <label for="name" class="form-label">Agent Profile Name (Optional)</label>
+                    <input type="text" class="form-control" id="name" name="name" 
+                           placeholder="Leave blank to use workspace name">
+                    <small class="form-text text-muted">
+                        Custom name for this agent profile in Control Plane
+                    </small>
+                </div>
+
+                {% if not workspaces %}
+                <div class="alert alert-warning">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <strong>No available workspaces.</strong> 
+                    All valid workspaces are already bound, or you need to 
+                    <a href="{% url 'agent_workspace_create' %}" class="alert-link">create and validate a workspace</a> first.
+                </div>
+                {% endif %}
+
+                <div class="d-flex justify-content-between">
+                    <a href="{% url 'agent_integration:cp_agent_list' %}" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Cancel
+                    </a>
+                    <button type="submit" class="btn btn-primary" {% if not workspaces %}disabled{% endif %}>
+                        <i class="fas fa-link"></i> Bind Workspace
+                    </button>
+                </div>
+            </form>
+
+            <div class="mt-4">
+                <h5>What happens after binding?</h5>
+                <ul>
+                    <li>Agent Profile is created in Control Plane</li>
+                    <li>Status: <span class="badge bg-secondary">DRAFT</span></li>
+                    <li>Validation: Synced from workspace</li>
+                    <li>You can then: Configure tools, add conditions, activate for execution</li>
+                    <li>Agent logic remains in workspace - edit there</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

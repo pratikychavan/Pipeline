@@ -101,3 +101,55 @@ class NodeExecution(models.Model):
     
     def __str__(self):
         return f"{self.node.name} - {self.status}"
+
+class AgentWorkspace(models.Model):
+    """Store Agent workspace with planner code and configuration"""
+    VALIDATION_STATUS_CHOICES = [
+        ('valid', 'Valid'),
+        ('invalid', 'Invalid'),
+        ('error', 'Error'),
+        ('pending', 'Pending Validation'),
+    ]
+    
+    PLANNER_TYPE_CHOICES = [
+        ('deterministic', 'Deterministic'),
+        ('llm', 'LLM-Based'),
+        ('custom', 'Custom'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255, help_text="Workspace name")
+    description = models.TextField(blank=True)
+    pipeline = models.ForeignKey(Pipeline, related_name='agent_workspaces', 
+                                 on_delete=models.CASCADE, null=True, blank=True,
+                                 help_text="Associated pipeline (optional)")
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    # Workspace files (plain text storage)
+    agent_code = models.TextField(help_text="agent.py file content", 
+                                   default="# Write your planner here\n")
+    agent_config = models.TextField(help_text="agent.yaml file content",
+                                     default="name: 'My Agent'\nobjective: ''\nallowed_tools: []\nconfig:\n  model: 'gpt-4o-mini'\n  temperature: 0.3\n  max_steps: 20\n")
+    requirements = models.TextField(blank=True, help_text="requirements.txt file content (optional)")
+    
+    # Validation tracking
+    validation_status = models.CharField(max_length=20, choices=VALIDATION_STATUS_CHOICES, 
+                                         default='pending')
+    validation_errors = models.JSONField(default=list, blank=True,
+                                         help_text="List of validation error messages")
+    last_validated_at = models.DateTimeField(null=True, blank=True)
+    
+    # Planner metadata
+    planner_type = models.CharField(max_length=20, choices=PLANNER_TYPE_CHOICES, 
+                                    default='custom')
+    planner_class_name = models.CharField(max_length=255, blank=True,
+                                          help_text="Detected planner class name")
+    
+    class Meta:
+        ordering = ['-updated_at']
+        unique_together = ['name', 'created_by']
+    
+    def __str__(self):
+        return f"{self.name} ({self.get_validation_status_display()})"

@@ -83,12 +83,28 @@ class WarpDrive:
         self.loaded_data_ids = set()
         
         # Set up artifact storage directory
-        self.artifact_storage_dir = os.path.join(
-            settings.MEDIA_ROOT, 
-            'artifacts', 
-            str(self.execution_id) if self.execution_id else 'temp'
-        )
+        # Priority: explicit context > environment variable > settings default
+        artifacts_dir_from_context = self.execution_context.get('artifacts_dir')
+        artifacts_dir_from_env = os.environ.get('WARPDRIVE_ARTIFACTS_DIR')
+        
+        if artifacts_dir_from_context:
+            self.artifact_storage_dir = artifacts_dir_from_context
+        elif artifacts_dir_from_env:
+            self.artifact_storage_dir = artifacts_dir_from_env
+        else:
+            # Fallback to settings-based directory
+            self.artifact_storage_dir = os.path.join(
+                settings.MEDIA_ROOT, 
+                'artifacts', 
+                str(self.execution_id) if self.execution_id else 'temp'
+            )
+        
         os.makedirs(self.artifact_storage_dir, exist_ok=True)
+        
+        # Log the artifacts directory for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Node {self.node_id}: Using artifacts directory: {self.artifact_storage_dir}")
         
         # Register built-in serializers
         self._register_builtin_serializers()
@@ -580,27 +596,47 @@ class WarpDrive:
     
     def _load_artifact_from_file(self, file_path: str, deserializer_func=None) -> Any:
         """
-        Load artifact from a file using the provided deserializer or pickle as default.
+        Load artifact from a file using the provided deserializer or auto-detect.
         
         Args:
-            file_path: Relative path from MEDIA_ROOT
+            file_path: Absolute or relative path to the artifact file
             deserializer_func: Optional custom deserializer function
             
         Returns:
             The deserialized data
         """
         import pickle
+        import json
         
-        # Get absolute path
-        abs_path = os.path.join(settings.MEDIA_ROOT, file_path)
+        # Handle absolute vs relative paths
+        if not os.path.isabs(file_path):
+            abs_path = os.path.join(settings.MEDIA_ROOT, file_path)
+        else:
+            abs_path = file_path
         
-        with open(abs_path, 'rb') as f:
-            if deserializer_func:
-                # Load serialized data then deserialize
-                serialized_data = pickle.load(f)
-                return deserializer_func(serialized_data)
-            else:
-                # Use pickle directly
+        # If deserializer provided, use it
+        if deserializer_func:
+            with open(abs_path, 'rb') as f:
+                return deserializer_func(f)
+        
+        # Auto-detect based on file extension
+        file_ext = os.path.splitext(abs_path)[1].lower()
+        
+        if file_ext in ['.json', '.dat']:
+            # Try JSON first for .dat files (common case)
+            try:
+                with open(abs_path, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # If JSON fails, try pickle
+                with open(abs_path, 'rb') as f:
+                    return pickle.load(f)
+        elif file_ext == '.pkl':
+            with open(abs_path, 'rb') as f:
+                return pickle.load(f)
+        else:
+            # Unknown extension - try pickle as default
+            with open(abs_path, 'rb') as f:
                 return pickle.load(f)
     
     def _register_builtin_serializers(self):
@@ -768,6 +804,10 @@ class WarpDrive:
                     if not file_path:
                         # Skip artifacts without file paths
                         continue
+                    
+                    # Make file_path absolute if it's relative
+                    if not os.path.isabs(file_path):
+                        file_path = os.path.join(self.artifact_storage_dir, file_path)
                     
                     # Find the appropriate deserializer
                     deserializer = None

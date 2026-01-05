@@ -37,4 +37,12 @@ urlpatterns = [
     
     # Test endpoints
     path('test/drag/', drag_test, name='drag_test'),
+    
+    # Agent Workspace management
+    path('agent-workspaces/', views.agent_workspace_list, name='agent_workspace_list'),
+    path('agent-workspaces/create/', views.agent_workspace_create, name='agent_workspace_create'),
+    path('agent-workspaces/<uuid:pk>/', views.agent_workspace_detail, name='agent_workspace_detail'),
+    path('agent-workspaces/<uuid:pk>/save/', views.agent_workspace_save, name='agent_workspace_save'),
+    path('agent-workspaces/<uuid:pk>/validate/', views.agent_workspace_validate, name='agent_workspace_validate'),
+    path('agent-workspaces/<uuid:pk>/delete/', views.agent_workspace_delete, name='agent_workspace_delete'),
 ]

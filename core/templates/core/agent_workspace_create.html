@@ -1,0 +1,60 @@
+{% extends "core/base.html" %}
+
+{% block title %}Create Agent Workspace{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-lg-8 offset-lg-2">
+            <h2><i class="fas fa-plus-circle"></i> Create Agent Workspace</h2>
+            
+            <div class="alert alert-warning mt-3">
+                <i class="fas fa-exclamation-triangle"></i>
+                <strong>Security Notice:</strong> Agent code is sandboxed and validated before execution. 
+                Only approved imports and operations are allowed.
+            </div>
+
+            <form method="post" class="mt-4">
+                {% csrf_token %}
+                
+                <div class="mb-3">
+                    <label for="name" class="form-label">Workspace Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="name" name="name" required
+                           placeholder="my_priority_planner">
+                    <small class="form-text text-muted">
+                        Unique name for this workspace (lowercase, no spaces)
+                    </small>
+                </div>
+
+                <div class="mb-3">
+                    <label for="description" class="form-label">Description</label>
+                    <textarea class="form-control" id="description" name="description" rows="3"
+                              placeholder="A planner that executes tools based on priority..."></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label for="pipeline" class="form-label">Associated Pipeline (Optional)</label>
+                    <select class="form-select" id="pipeline" name="pipeline">
+                        <option value="">-- None --</option>
+                        {% for pipeline in pipelines %}
+                            <option value="{{ pipeline.id }}">{{ pipeline.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <small class="form-text text-muted">
+                        Link this workspace to a specific pipeline
+                    </small>
+                </div>
+
+                <div class="d-flex justify-content-between">
+                    <a href="{% url 'agent_workspace_list' %}" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Cancel
+                    </a>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-check"></i> Create Workspace
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

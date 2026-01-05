@@ -7,7 +7,7 @@ They define what agents CAN do, not what they ARE DOING.
 
 from django.db import models
 from django.core.exceptions import ValidationError
-from core.models import Pipeline
+from core.models import Pipeline, AgentWorkspace
 import uuid
 import json
 
@@ -16,8 +16,14 @@ class AgentProfile(models.Model):
     """
     Agent configuration profile (NOT runtime state).
     
-    This defines an agent's capabilities, constraints, and behavior.
-    Agents can be in draft, active, or archived states.
+    IMPORTANT: Agent logic and definition are authored in AgentWorkspace.
+    This model provides governance, validation, and execution control only.
+    
+    Canonical Source: AgentWorkspace (agent.py + agent.yaml)
+    Control Plane Role: Policy enforcement, activation/deactivation, binding
+    
+    This defines constraints and governance for an agent, but the agent's
+    actual behavior is determined by its linked workspace.
     """
     STATUS_CHOICES = [
         ('draft', 'Draft'),
@@ -30,7 +36,45 @@ class AgentProfile(models.Model):
     description = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     
-    # Execution constraints
+    # CANONICAL SOURCE: Link to agent workspace
+    workspace = models.ForeignKey(
+        AgentWorkspace,
+        on_delete=models.PROTECT,  # Cannot delete workspace if agent is using it
+        related_name='control_plane_agents',
+        null=True,  # Temporary: Allow null during migration
+        blank=True,
+        help_text="Workspace containing agent.py and agent.yaml (CANONICAL SOURCE)"
+    )
+    
+    # Workspace version tracking (for change detection)
+    workspace_version_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Hash of workspace content at last validation/materialization"
+    )
+    last_validated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of last workspace validation"
+    )
+    validation_status = models.CharField(
+        max_length=20,
+        default='pending',
+        choices=[
+            ('pending', 'Pending Validation'),
+            ('valid', 'Valid'),
+            ('invalid', 'Invalid'),
+            ('error', 'Validation Error'),
+        ],
+        help_text="Result of last workspace validation"
+    )
+    validation_errors = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Validation error messages from workspace loader"
+    )
+    
+    # Execution constraints (GOVERNANCE - not agent logic)
     max_steps = models.IntegerField(
         default=100,
         help_text="Maximum number of decision steps before termination"

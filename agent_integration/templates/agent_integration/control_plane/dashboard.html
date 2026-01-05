@@ -15,8 +15,8 @@
 
     <div class="alert alert-info mb-4">
         <i class="fas fa-info-circle"></i>
-        <strong>Configuration Dashboard:</strong> Manage agent profiles, tool registry, and business conditions. 
-        This is for CONFIGURATION only - use the Executions dashboard to monitor runtime behavior.
+        <strong>Governance Dashboard:</strong> The Control Plane provides governance and execution control for agents authored in Agent Workspaces. 
+        Bind workspaces to manage tool access, configure business conditions, and control activation.
     </div>
 
     <!-- Statistics Cards -->
@@ -35,8 +35,8 @@
                         <a href="{% url 'agent_integration:cp_agent_list' %}" class="btn btn-outline-primary">
                             <i class="fas fa-list"></i> View All
                         </a>
-                        <a href="{% url 'agent_integration:cp_agent_create' %}" class="btn btn-primary">
-                            <i class="fas fa-plus"></i> Create
+                        <a href="{% url 'agent_integration:cp_agent_create_from_workspace' %}" class="btn btn-primary">
+                            <i class="fas fa-link"></i> Bind Workspace
                         </a>
                     </div>
                 </div>
@@ -100,11 +100,24 @@
                     <a href="{% url 'agent_integration:cp_agent_detail' agent.id %}" class="list-group-item list-group-item-action">
                         <div class="d-flex justify-content-between align-items-center">
                             <span>{{ agent.name }}</span>
-                            <span class="badge {% if agent.status == 'active' %}bg-success{% elif agent.status == 'draft' %}bg-secondary{% else %}bg-dark{% endif %}">
-                                {{ agent.status|upper }}
-                            </span>
+                            <div>
+                                {% if agent.validation_status == 'valid' %}
+                                    <span class="badge bg-success me-1">Valid</span>
+                                {% elif agent.validation_status == 'invalid' %}
+                                    <span class="badge bg-danger me-1">Invalid</span>
+                                {% endif %}
+                                <span class="badge {% if agent.status == 'active' %}bg-success{% elif agent.status == 'draft' %}bg-secondary{% else %}bg-dark{% endif %}">
+                                    {{ agent.status|upper }}
+                                </span>
+                            </div>
                         </div>
-                        <small class="text-muted">{{ agent.created_at|date:"M d, Y" }}</small>
+                        <small class="text-muted">
+                            {% if agent.workspace %}
+                                <i class="fas fa-folder"></i> {{ agent.workspace.name }}
+                            {% else %}
+                                No workspace
+                            {% endif %}
+                        </small>
                     </a>
                     {% empty %}
                     <div class="list-group-item text-muted">No agents yet</div>

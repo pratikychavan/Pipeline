@@ -1,0 +1,388 @@
+{% extends "core/base.html" %}
+
+{% block title %}{{ workspace.name }} - Agent Workspace{% endblock %}
+
+{% block extra_css %}
+<style>
+    .file-editor {
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        margin-bottom: 20px;
+    }
+    
+    .file-editor-header {
+        background-color: #f8f9fa;
+        padding: 10px 15px;
+        border-bottom: 1px solid #dee2e6;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    .file-editor-body {
+        position: relative;
+    }
+    
+    .editor-textarea {
+        font-family: 'Courier New', monospace;
+        font-size: 14px;
+        border: none;
+        width: 100%;
+        padding: 15px;
+        min-height: 300px;
+        resize: vertical;
+        line-height: 1.5;
+        tab-size: 4;
+    }
+    
+    .line-numbers {
+        position: absolute;
+        left: 0;
+        top: 0;
+        background-color: #f8f9fa;
+        color: #6c757d;
+        padding: 15px 10px;
+        text-align: right;
+        font-family: 'Courier New', monospace;
+        font-size: 14px;
+        line-height: 1.5;
+        border-right: 1px solid #dee2e6;
+        user-select: none;
+        pointer-events: none;
+    }
+    
+    .editor-with-lines {
+        padding-left: 60px;
+    }
+    
+    .validation-error {
+        background-color: #f8d7da;
+        border-left: 3px solid #dc3545;
+        padding: 10px;
+        margin: 10px 0;
+        font-family: monospace;
+        font-size: 13px;
+    }
+    
+    .sdk-reference {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        max-height: 500px;
+        overflow-y: auto;
+    }
+    
+    .security-banner {
+        background-color: #fff3cd;
+        border: 2px solid #ffc107;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+    }
+    
+    .status-badge {
+        font-size: 14px;
+        padding: 5px 10px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h2>
+                <i class="fas fa-robot"></i> {{ workspace.name }}
+                {% if workspace.validation_status == 'valid' %}
+                    <span class="badge bg-success status-badge">
+                        <i class="fas fa-check-circle"></i> Valid
+                    </span>
+                {% elif workspace.validation_status == 'invalid' %}
+                    <span class="badge bg-danger status-badge">
+                        <i class="fas fa-times-circle"></i> Invalid
+                    </span>
+                {% elif workspace.validation_status == 'error' %}
+                    <span class="badge bg-warning text-dark status-badge">
+                        <i class="fas fa-exclamation-triangle"></i> Error
+                    </span>
+                {% else %}
+                    <span class="badge bg-secondary status-badge">
+                        <i class="fas fa-clock"></i> Pending Validation
+                    </span>
+                {% endif %}
+            </h2>
+            {% if workspace.description %}
+                <p class="text-muted">{{ workspace.description }}</p>
+            {% endif %}
+        </div>
+        <div>
+            <a href="{% url 'agent_workspace_list' %}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left"></i> Back to List
+            </a>
+        </div>
+    </div>
+
+    <!-- Security Warning Banner -->
+    <div class="security-banner">
+        <strong><i class="fas fa-shield-alt"></i> Security Notice:</strong>
+        Agent code is sandboxed and validated before execution. The platform retains full control 
+        over execution, retries, and infrastructure. User code CANNOT access the filesystem, network, 
+        or platform internals.
+    </div>
+
+    <div class="row">
+        <!-- Left Column: File Editors -->
+        <div class="col-lg-8">
+            <!-- Validation Results -->
+            <div id="validationResults" class="mb-3" style="display: none;">
+                <div id="validationSuccess" class="alert alert-success" style="display: none;">
+                    <i class="fas fa-check-circle"></i>
+                    <strong>Validation Passed!</strong>
+                    <div id="validationSuccessDetails"></div>
+                </div>
+                <div id="validationErrors" class="alert alert-danger" style="display: none;">
+                    <i class="fas fa-times-circle"></i>
+                    <strong>Validation Failed</strong>
+                    <div id="validationErrorDetails"></div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="mb-3">
+                <button id="saveBtn" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Save Changes
+                </button>
+                <button id="validateBtn" class="btn btn-success">
+                    <i class="fas fa-check"></i> Validate Agent Code
+                </button>
+                <span id="saveStatus" class="ms-2"></span>
+            </div>
+
+            <!-- agent.py Editor -->
+            <div class="file-editor">
+                <div class="file-editor-header">
+                    <span><i class="fas fa-file-code"></i> <strong>agent.py</strong></span>
+                    <span class="badge bg-primary">Editable</span>
+                </div>
+                <div class="file-editor-body">
+                    <textarea id="agentCodeEditor" class="editor-textarea" 
+                              spellcheck="false">{{ workspace.agent_code }}</textarea>
+                </div>
+            </div>
+
+            <!-- agent.yaml Editor -->
+            <div class="file-editor">
+                <div class="file-editor-header">
+                    <span><i class="fas fa-file-alt"></i> <strong>agent.yaml</strong></span>
+                    <span class="badge bg-primary">Editable</span>
+                </div>
+                <div class="file-editor-body">
+                    <textarea id="agentConfigEditor" class="editor-textarea" 
+                              spellcheck="false">{{ workspace.agent_config }}</textarea>
+                </div>
+            </div>
+
+            <!-- requirements.txt Editor -->
+            <div class="file-editor">
+                <div class="file-editor-header">
+                    <span><i class="fas fa-file"></i> <strong>requirements.txt</strong></span>
+                    <span class="badge bg-warning text-dark">Optional - Restricted</span>
+                </div>
+                <div class="file-editor-body">
+                    <textarea id="requirementsEditor" class="editor-textarea" 
+                              spellcheck="false" 
+                              placeholder="# Optional - Add approved packages only">{{ workspace.requirements }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: SDK Reference -->
+        <div class="col-lg-4">
+            <div class="sdk-reference">
+                <h5><i class="fas fa-book"></i> SDK Reference</h5>
+                <small class="text-muted">READ ONLY - Contract & Constraints</small>
+                
+                <hr>
+                
+                <h6><i class="fas fa-code"></i> Planner Interface</h6>
+                <pre class="small bg-white p-2 rounded"><code>from warpdrive_agent_sdk import (
+    Planner,
+    PlannerInput,
+    PlannerDecision,
+    PlannerDecisionType
+)
+
+class MyPlanner(Planner):
+    async def plan_next_action(
+        self,
+        planner_input: PlannerInput
+    ) -> PlannerDecision:
+        # Your logic here
+        return PlannerDecision(
+            decision_type=PlannerDecisionType.EXECUTE_TOOL,
+            tool_id='tool_id',
+            reasoning='Why this decision'
+        )
+</code></pre>
+
+                <hr>
+                
+                <h6><i class="fas fa-check-circle text-success"></i> Allowed Imports</h6>
+                <div class="small">
+                    <strong>SDK (Required):</strong>
+                    <ul class="mb-2">
+                        {% for module in allowed_third_party %}
+                        <li><code>{{ module }}</code></li>
+                        {% endfor %}
+                    </ul>
+                    
+                    <strong>Standard Library:</strong>
+                    <ul style="column-count: 2; column-gap: 10px;">
+                        {% for module in allowed_stdlib %}
+                        <li><code>{{ module }}</code></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+
+                <hr>
+                
+                <h6><i class="fas fa-ban text-danger"></i> Forbidden Behaviors</h6>
+                <ul class="small text-danger">
+                    <li>File system access (<code>os</code>, <code>pathlib</code>)</li>
+                    <li>Network calls (<code>socket</code>, <code>requests</code>, <code>urllib</code>)</li>
+                    <li>Process spawning (<code>subprocess</code>)</li>
+                    <li>Code execution (<code>eval</code>, <code>exec</code>, <code>__import__</code>)</li>
+                    <li>Platform internals (<code>django</code>, <code>core</code>, <code>agent_integration</code>)</li>
+                    <li>Threading or async control</li>
+                </ul>
+
+                <hr>
+
+                <h6><i class="fas fa-exclamation-triangle text-warning"></i> Critical Rules</h6>
+                <ul class="small">
+                    <li><strong>Stateless:</strong> No instance variables between calls</li>
+                    <li><strong>Bounded:</strong> One decision per <code>plan_next_action()</code> call</li>
+                    <li><strong>Read-Only:</strong> <code>PlannerInput</code> is immutable</li>
+                    <li><strong>No Control:</strong> Cannot trigger execution or retries</li>
+                </ul>
+
+                <hr>
+
+                <div class="small text-muted">
+                    <i class="fas fa-info-circle"></i>
+                    See <a href="/static/docs/warpdrive_agent_sdk_README.md" target="_blank">full SDK documentation</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const saveBtn = document.getElementById('saveBtn');
+    const validateBtn = document.getElementById('validateBtn');
+    const saveStatus = document.getElementById('saveStatus');
+    const validationResults = document.getElementById('validationResults');
+    const validationSuccess = document.getElementById('validationSuccess');
+    const validationErrors = document.getElementById('validationErrors');
+    
+    const agentCodeEditor = document.getElementById('agentCodeEditor');
+    const agentConfigEditor = document.getElementById('agentConfigEditor');
+    const requirementsEditor = document.getElementById('requirementsEditor');
+    
+    // Save workspace
+    saveBtn.addEventListener('click', function() {
+        saveBtn.disabled = true;
+        saveStatus.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> Saving...</span>';
+        
+        fetch('{% url "agent_workspace_save" workspace.id %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: new URLSearchParams({
+                'agent_code': agentCodeEditor.value,
+                'agent_config': agentConfigEditor.value,
+                'requirements': requirementsEditor.value
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                saveStatus.innerHTML = '<span class="text-success"><i class="fas fa-check"></i> Saved</span>';
+                setTimeout(() => saveStatus.innerHTML = '', 3000);
+            } else {
+                saveStatus.innerHTML = '<span class="text-danger"><i class="fas fa-times"></i> Error: ' + data.error + '</span>';
+            }
+        })
+        .catch(error => {
+            saveStatus.innerHTML = '<span class="text-danger"><i class="fas fa-times"></i> Failed to save</span>';
+        })
+        .finally(() => {
+            saveBtn.disabled = false;
+        });
+    });
+    
+    // Validate workspace
+    validateBtn.addEventListener('click', function() {
+        validateBtn.disabled = true;
+        validateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Validating...';
+        validationResults.style.display = 'none';
+        
+        fetch('{% url "agent_workspace_validate" workspace.id %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRFToken': '{{ csrf_token }}'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            validationResults.style.display = 'block';
+            
+            if (data.success) {
+                validationSuccess.style.display = 'block';
+                validationErrors.style.display = 'none';
+                document.getElementById('validationSuccessDetails').innerHTML = `
+                    <ul class="mb-0 mt-2">
+                        <li>Planner Class: <code>${data.planner_class}</code></li>
+                        <li>Agent Name: <code>${data.agent_name}</code></li>
+                    </ul>
+                `;
+                // Reload page to update status badge
+                setTimeout(() => location.reload(), 2000);
+            } else {
+                validationSuccess.style.display = 'none';
+                validationErrors.style.display = 'block';
+                
+                let errorHtml = '<div class="mt-2">';
+                if (data.errors && data.errors.length > 0) {
+                    data.errors.forEach(error => {
+                        errorHtml += `<div class="validation-error">${error}</div>`;
+                    });
+                } else {
+                    errorHtml += `<div class="validation-error">${data.error}</div>`;
+                }
+                errorHtml += '</div>';
+                
+                document.getElementById('validationErrorDetails').innerHTML = errorHtml;
+            }
+        })
+        .catch(error => {
+            validationResults.style.display = 'block';
+            validationSuccess.style.display = 'none';
+            validationErrors.style.display = 'block';
+            document.getElementById('validationErrorDetails').innerHTML = 
+                '<div class="validation-error">Network error: ' + error.message + '</div>';
+        })
+        .finally(() => {
+            validateBtn.disabled = false;
+            validateBtn.innerHTML = '<i class="fas fa-check"></i> Validate Agent Code';
+        });
+    });
+});
+</script>
+{% endblock %}

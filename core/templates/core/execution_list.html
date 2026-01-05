@@ -19,6 +19,7 @@
                         <thead class="table-light">
                             <tr>
                                 <th>Pipeline</th>
+                                <th>Mode</th>
                                 <th>Status</th>
                                 <th>Started</th>
                                 <th>Duration</th>
@@ -33,6 +34,13 @@
                                         <strong>{{ execution.pipeline.name }}</strong>
                                         {% if execution.pipeline.description %}
                                             <br><small class="text-muted">{{ execution.pipeline.description|truncatechars:50 }}</small>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if execution.has_agent_run %}
+                                            <span class="badge bg-info"><i class="fas fa-robot"></i> Agent</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary"><i class="fas fa-list-ol"></i> Deterministic</span>
                                         {% endif %}
                                     </td>
                                     <td>

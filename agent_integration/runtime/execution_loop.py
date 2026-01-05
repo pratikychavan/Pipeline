@@ -141,6 +141,11 @@ class AgentExecutionLoop:
                 # Execute one step
                 step_result = self._execute_step()
                 
+                # Check for pipeline completion (agent decided to complete)
+                if step_result.get('status') == 'pipeline_completed':
+                    # Agent decided to complete the entire pipeline
+                    break
+                
                 # Check for human intervention request
                 if step_result.get('human_intervention_required'):
                     self._request_human_intervention(
@@ -201,6 +206,119 @@ class AgentExecutionLoop:
         
         # Call planner to select next node
         selected_node_id, reasoning = self._call_planner(available_nodes)
+        
+        # Handle special cases where node_id is None
+        if selected_node_id is None:
+            # Check for special markers from custom planner
+            if reasoning and reasoning.startswith('__COMPLETE__:'):
+                # Extract actual reasoning
+                actual_reasoning = reasoning.replace('__COMPLETE__:', '', 1)
+                
+                # Record completion decision
+                decision = self._record_decision(
+                    decision_type='complete',
+                    selected_node_id=None,
+                    reasoning=actual_reasoning,
+                    violations=[]
+                )
+                
+                # Mark as completed
+                self.agent_run.status = 'completed'
+                self.agent_run.save()
+                
+                return {
+                    'status': 'pipeline_completed',
+                    'message': actual_reasoning
+                }
+            
+            # Check for human intervention request marker
+            if reasoning and reasoning.startswith('__REQUEST_HUMAN__:'):
+                actual_reasoning = reasoning.replace('__REQUEST_HUMAN__:', '', 1)
+                
+                decision = self._record_decision(
+                    decision_type='request_human',
+                    selected_node_id=None,
+                    reasoning=actual_reasoning,
+                    violations=[]
+                )
+                
+                self.agent_run.status = 'waiting_for_human'
+                self.agent_run.human_intervention_required = True
+                self.agent_run.save()
+                
+                return {
+                    'status': 'waiting_for_human',
+                    'message': actual_reasoning,
+                    'human_intervention_required': True
+                }
+            
+            # Check for fail marker
+            if reasoning and reasoning.startswith('__FAIL__:'):
+                actual_reasoning = reasoning.replace('__FAIL__:', '', 1)
+                
+                decision = self._record_decision(
+                    decision_type='fail',
+                    selected_node_id=None,
+                    reasoning=actual_reasoning,
+                    violations=[]
+                )
+                
+                self.agent_run.status = 'failed'
+                self.agent_run.save()
+                
+                return {
+                    'status': 'failed',
+                    'error': actual_reasoning
+                }
+            
+            # Fallback: try to detect from reasoning text (for LLM planner compatibility)
+            if reasoning and ('complete' in reasoning.lower() or 'pipeline complete' in reasoning.lower()):
+                decision = self._record_decision(
+                    decision_type='complete',
+                    selected_node_id=None,
+                    reasoning=reasoning,
+                    violations=[]
+                )
+                
+                self.agent_run.status = 'completed'
+                self.agent_run.save()
+                
+                return {
+                    'status': 'pipeline_completed',
+                    'message': reasoning
+                }
+            
+            # Check if this is a human intervention request (fallback)
+            if reasoning and ('human' in reasoning.lower() or 'intervention' in reasoning.lower()):
+                decision = self._record_decision(
+                    decision_type='request_human',
+                    selected_node_id=None,
+                    reasoning=reasoning,
+                    violations=[]
+                )
+                
+                self.agent_run.status = 'waiting_for_human'
+                self.agent_run.human_intervention_required = True
+                self.agent_run.save()
+                
+                return {
+                    'status': 'waiting_for_human',
+                    'message': reasoning,
+                    'human_intervention_required': True
+                }
+            
+            # Otherwise it's an error
+            decision = self._record_decision(
+                decision_type='error',
+                selected_node_id=None,
+                reasoning=reasoning or "Planner returned None without clear completion signal",
+                violations=[]
+            )
+            
+            return {
+                'status': 'failed',
+                'error': reasoning or "Planner returned invalid decision"
+            }
         
         # Validate selection with guardrails
         is_valid, violations = self.guardrails.validate_before_execution(
@@ -273,9 +391,142 @@ class AgentExecutionLoop:
             'summary': result.get('summary')
         }
     
+    def _call_custom_planner(self, planner, available_nodes: List[str]) -> tuple[str, str]:
+        """
+        Call custom workspace planner using SDK interface.
+        
+        Args:
+            planner: Custom planner instance (implements Planner interface)
+            available_nodes: List of node IDs that can be executed
+            
+        Returns:
+            (selected_node_id, reasoning)
+        """
+        from core.models import Node
+        from warpdrive_agent_sdk import PlannerInput
+        
+        # Build nodes info
+        nodes_info = []
+        for node_id in available_nodes:
+            node = Node.objects.get(id=node_id)
+            nodes_info.append({
+                'id': str(node.id),
+                'name': node.name,
+                'description': node.description or '',
+                'order': node.order
+            })
+        
+        # Get completed tools with their actual execution status
+        completed_tools = []
+        from ..models import ToolExecution
+        completed = ToolExecution.objects.filter(
+            agent_run=self.agent_run,
+            status='completed'
+        ).select_related('node_execution__node')
+        
+        for tool_exec in completed:
+            if tool_exec.node_execution and tool_exec.node_execution.node:
+                node_exec_status = tool_exec.node_execution.status
+                completed_tools.append({
+                    'tool_name': tool_exec.node_execution.node.name,
+                    'tool_id': str(tool_exec.node_execution.node.id),
+                    'status': node_exec_status,
+                    'has_error': bool(tool_exec.node_execution.error_message),
+                    'output_data': tool_exec.node_execution.output_data or {},
+                    'outputs': list(tool_exec.node_execution.output_data.keys()) if tool_exec.node_execution.output_data else []
+                })
+        
+        # Build runtime spec
+        tools_list = []
+        for node in nodes_info:
+            tools_list.append({
+                'tool_id': node['id'],
+                'tool_name': node['name'],
+                'description': node['description'],
+                'execution_order': node['order'],
+                'input_variables': [],
+                'agent_constraints': {
+                    'is_allowed': True,
+                    'max_calls': 1,
+                    'dependencies': []
+                }
+            })
+        
+        runtime_spec = {
+            'available_tools': tools_list
+        }
+        
+        # Build execution history
+        execution_history = [
+            {
+                'tool_id': tool['tool_id'],
+                'tool_name': tool['tool_name'],
+                'status': tool['status'],
+                'has_error': tool['has_error'],
+                'output_data': tool['output_data'],
+                'outputs': tool['outputs'],
+                'success': tool['status'] == 'completed' and not tool['has_error']
+            } for tool in completed_tools
+        ]
+        
+        # Build current state
+        current_state = {
+            'execution_context': self.execution_context,
+            'current_step': self.current_step,
+            'max_steps': self.agent_run.max_steps
+        }
+        
+        # Create PlannerInput
+        planner_input = PlannerInput(
+            runtime_spec=runtime_spec,
+            execution_history=execution_history,
+            current_state=current_state,
+            step_number=self.current_step
+        )
+        
+        # Call the custom planner
+        import asyncio
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            decision = asyncio.run(planner.plan_next_action(planner_input))
+            logger.info(f"Custom planner decision: type={decision.decision_type}, tool_id={decision.tool_id}, reasoning={decision.reasoning}")
+        except Exception as e:
+            import traceback
+            logger.error(f"Custom planner exception: {e}")
+            logger.debug(traceback.format_exc())
+            return (None, f"Custom planner error: {str(e)}")
+        
+        # Convert decision to (node_id, reasoning)
+        from warpdrive_agent_sdk import PlannerDecisionType
+        if decision.decision_type == PlannerDecisionType.EXECUTE_TOOL:
+            if decision.tool_id:
+                return (decision.tool_id, decision.reasoning)
+            else:
+                logger.error(f"EXECUTE_TOOL decision has None tool_id. Reasoning: {decision.reasoning}")
+                return (None, decision.reasoning or "Tool ID was None")
+        elif decision.decision_type == PlannerDecisionType.COMPLETE:
+            # Use special marker to distinguish COMPLETE from errors
+            return (None, f"__COMPLETE__:{decision.reasoning}")
+        elif decision.decision_type == PlannerDecisionType.REQUEST_HUMAN:
+            # Use special marker for human intervention
+            return (None, f"__REQUEST_HUMAN__:{decision.reasoning}")
+        elif decision.decision_type == PlannerDecisionType.FAIL:
+            return (None, f"__FAIL__:{decision.reasoning}")
+        elif decision.decision_type == PlannerDecisionType.REQUEST_HUMAN:
+            return (None, decision.reasoning)
+        elif decision.decision_type == PlannerDecisionType.FAIL:
+            return (None, decision.reasoning)
+        
+        # Fallback
+        return (None, "Custom planner returned invalid decision")
+    
     def _call_planner(self, available_nodes: List[str]) -> tuple[str, str]:
         """
-        Call LLM planner to select next node.
+        Call planner to select next node.
+        
+        This can be either a custom workspace planner or LLM planner.
         
         Args:
             available_nodes: List of node IDs that can be executed
@@ -283,6 +534,59 @@ class AgentExecutionLoop:
         Returns:
             (selected_node_id, reasoning)
         """
+        # Check if we have a custom workspace planner
+        agent_profile_id = self.agent_config.get('agent_profile_id')
+        if agent_profile_id:
+            try:
+                # Load the workspace planner
+                from agent_integration.control_plane_models import AgentProfile
+                agent_profile = AgentProfile.objects.select_related('workspace').get(pk=agent_profile_id)
+                
+                if agent_profile.workspace and agent_profile.workspace.agent_code:
+                    # Dynamically load the planner class from agent_code
+                    import sys
+                    from types import ModuleType
+                    
+                    # Create a temporary module to execute the agent code
+                    agent_module = ModuleType('temp_agent_module')
+                    agent_module.__dict__['__builtins__'] = __builtins__
+                    
+                    # Make warpdrive_agent_sdk available
+                    import warpdrive_agent_sdk
+                    agent_module.__dict__['warpdrive_agent_sdk'] = warpdrive_agent_sdk
+                    from warpdrive_agent_sdk import Planner, PlannerInput, PlannerDecision, PlannerDecisionType
+                    agent_module.__dict__['Planner'] = Planner
+                    agent_module.__dict__['PlannerInput'] = PlannerInput
+                    agent_module.__dict__['PlannerDecision'] = PlannerDecision
+                    agent_module.__dict__['PlannerDecisionType'] = PlannerDecisionType
+                    
+                    # Add typing support
+                    import typing
+                    agent_module.__dict__['typing'] = typing
+                    agent_module.__dict__['Dict'] = typing.Dict
+                    agent_module.__dict__['List'] = typing.List
+                    agent_module.__dict__['Set'] = typing.Set
+                    agent_module.__dict__['Optional'] = typing.Optional
+                    
+                    # Execute the agent code to define the planner class
+                    exec(agent_profile.workspace.agent_code, agent_module.__dict__)
+                    
+                    # Get the planner class
+                    planner_class_name = agent_profile.workspace.planner_class_name
+                    if planner_class_name in agent_module.__dict__:
+                        PlannerClass = agent_module.__dict__[planner_class_name]
+                        custom_planner = PlannerClass()
+                        
+                        # Use the custom planner with SDK interface
+                        return self._call_custom_planner(custom_planner, available_nodes)
+            except Exception as e:
+                import logging
+                import traceback
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to load workspace planner: {e}")
+                logger.debug(traceback.format_exc())
+                # Fall through to LLM planner
+        
         # Check if we should use real LLM or fallback
         model = self.agent_config.get('model', 'gpt-4')
         
@@ -350,7 +654,7 @@ class AgentExecutionLoop:
                             'order': node.order
                         })
                     
-                    # Get completed tools
+                    # Get completed tools with their actual execution status
                     completed_tools = []
                     from ..models import ToolExecution
                     completed = ToolExecution.objects.filter(
@@ -360,9 +664,14 @@ class AgentExecutionLoop:
                     
                     for tool_exec in completed:
                         if tool_exec.node_execution and tool_exec.node_execution.node:
+                            # Use the actual NodeExecution status, not ToolExecution status
+                            node_exec_status = tool_exec.node_execution.status
                             completed_tools.append({
                                 'tool_name': tool_exec.node_execution.node.name,
-                                'tool_id': str(tool_exec.node_execution.node.id)
+                                'tool_id': str(tool_exec.node_execution.node.id),
+                                'status': node_exec_status,  # Include actual execution status
+                                'has_error': bool(tool_exec.node_execution.error_message),
+                                'outputs': list(tool_exec.node_execution.output_data.keys()) if tool_exec.node_execution.output_data else []
                             })
                     
                     # Build runtime spec format - available_tools should be a list
@@ -385,12 +694,14 @@ class AgentExecutionLoop:
                         'available_tools': tools_list
                     }
                     
-                    # Build execution history
+                    # Build execution history with actual status from NodeExecution
                     execution_history = [
                         {
                             'tool_id': tool['tool_id'],
                             'tool_name': tool['tool_name'],
-                            'status': 'completed'
+                            'status': tool['status'],  # Use actual status from NodeExecution
+                            'has_error': tool['has_error'],
+                            'outputs': tool['outputs']
                         } for tool in completed_tools
                     ]
                     

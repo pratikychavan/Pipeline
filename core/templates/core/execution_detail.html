@@ -86,19 +86,88 @@
     stroke: #dc3545;
     stroke-width: 2.5;
 }
+
+/* Timeline Styles */
+.timeline {
+    position: relative;
+    padding-left: 40px;
+}
+
+.timeline::before {
+    content: '';
+    position: absolute;
+    left: 15px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #dee2e6;
+}
+
+.timeline-item {
+    position: relative;
+    padding-bottom: 30px;
+}
+
+.timeline-marker {
+    position: absolute;
+    left: -40px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 3px solid white;
+    box-shadow: 0 0 0 2px #dee2e6;
+}
+
+.timeline-content {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 15px;
+}
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="container-fluid p-4">
+    <!-- Human-in-the-Loop Banner (if applicable) -->
+    {% if agent_run and agent_run.human_intervention_required %}
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <h5 class="alert-heading">
+            <i class="fas fa-pause-circle"></i> Execution Paused — Human Review Required
+        </h5>
+        <p class="mb-2"><strong>Reason:</strong> {{ agent_run.human_intervention_reason|default:"Agent requested human intervention" }}</p>
+        <hr>
+        <div class="btn-group">
+            <a href="{% url 'agent_integration:resume_agent_run' agent_run.pk %}" class="btn btn-success">
+                <i class="fas fa-play"></i> Resume Execution
+            </a>
+            <a href="{% url 'agent_integration:abort_agent_run' agent_run.pk %}" class="btn btn-danger">
+                <i class="fas fa-stop"></i> Abort Execution
+            </a>
+        </div>
+    </div>
+    {% endif %}
+    
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h2>
                 <i class="fas fa-play-circle"></i> 
-                Execution: {{ execution.pipeline.name }}
+                Pipeline Run: {{ execution.pipeline.name }}
             </h2>
             <p class="text-muted mb-0">
                 Started {{ execution.started_at|date:"M d, Y H:i:s" }} by {{ execution.started_by.username }}
+                {% if execution_mode == 'agent' %}
+                <span class="badge bg-info ms-2">
+                    <i class="fas fa-robot"></i> Agent-Controlled
+                </span>
+                {% else %}
+                <span class="badge bg-secondary ms-2">
+                    <i class="fas fa-list-ol"></i> Deterministic
+                </span>
+                {% endif %}
             </p>
         </div>
         <div>
@@ -189,7 +258,15 @@
         </div>
         <div class="card-body">
             <div class="row">
-                <div class="col-md-3">
+                <div class="col-md-2">
+                    <strong>Mode:</strong><br>
+                    {% if execution_mode == 'agent' %}
+                        <span class="badge bg-info">Agent-Controlled</span>
+                    {% else %}
+                        <span class="badge bg-secondary">Deterministic</span>
+                    {% endif %}
+                </div>
+                <div class="col-md-2">
                     <strong>Status:</strong><br>
                     <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }}">
                         {{ execution.get_status_display }}
@@ -207,17 +284,185 @@
                         <span class="text-muted">Running...</span>
                     {% endif %}
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <strong>Nodes:</strong><br>
-                    {{ node_executions|length }} total
+                    {{ node_executions|length }} executed
                 </div>
             </div>
             
+            {% if agent_run %}
+            <div class="row mt-3">
+                <div class="col-md-12">
+                    <strong>Agent Info:</strong>
+                    <span class="badge bg-light text-dark">Steps: {{ agent_run.current_step|default:0 }}/{{ agent_run.max_steps }}</span>
+                    {% if agent_run.agent_config.model %}
+                    <span class="badge bg-light text-dark">Model: {{ agent_run.agent_config.model }}</span>
+                    {% endif %}
+                    {% if agent_run.agent_config.temperature %}
+                    <span class="badge bg-light text-dark">Temp: {{ agent_run.agent_config.temperature }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+            
             {% if execution.error_message %}
-                <div class="alert alert-danger mt-3">
-                    <strong>Error:</strong> {{ execution.error_message }}
+                <div class="alert alert-danger mt-3 mb-0">
+                    <strong><i class="fas fa-exclamation-triangle"></i> Error:</strong> {{ execution.error_message }}
                 </div>
             {% endif %}
+        </div>
+    </div>
+    
+    <!-- Unified Execution Timeline -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">
+                <i class="fas fa-stream"></i> Execution Timeline
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="timeline">
+                {% if execution_mode == 'agent' and agent_decisions %}
+                    <!-- Agent-controlled timeline with decisions -->
+                    {% for decision in agent_decisions %}
+                        <!-- Planner Decision Event -->
+                        <div class="timeline-item">
+                            <div class="timeline-marker bg-primary">
+                                <i class="fas fa-brain text-white"></i>
+                            </div>
+                            <div class="timeline-content">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <h6 class="mb-1">
+                                            <span class="badge bg-primary">Step {{ decision.step_number }}</span>
+                                            Planner Decision
+                                        </h6>
+                                        <p class="text-muted small mb-2">{{ decision.timestamp|date:"M d, Y H:i:s" }}</p>
+                                    </div>
+                                    <span class="badge bg-light text-dark">{{ decision.decision_type }}</span>
+                                </div>
+                                
+                                {% if decision.reasoning %}
+                                <div class="alert alert-light mb-2">
+                                    <strong><i class="fas fa-quote-left"></i> Model-generated reasoning (for explanation only):</strong>
+                                    <p class="mb-0 mt-2 fst-italic">{{ decision.reasoning }}</p>
+                                </div>
+                                {% endif %}
+                                
+                                {% if decision.parsed_decision.selected_node_id %}
+                                <p class="mb-0"><strong>Selected Tool:</strong> 
+                                    <code>{{ decision.parsed_decision.selected_node_id }}</code>
+                                </p>
+                                {% endif %}
+                                
+                                {% if decision.guardrail_violations %}
+                                <div class="alert alert-warning mt-2 mb-0">
+                                    <strong><i class="fas fa-shield-alt"></i> Guardrail Violations:</strong>
+                                    <ul class="mb-0 mt-1">
+                                        {% for violation in decision.guardrail_violations %}
+                                        <li>{{ violation.message }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        
+                        <!-- Corresponding Node Execution (if any) -->
+                        {% for node_exec in node_executions %}
+                            {% if node_exec.node.id|stringformat:"s" == decision.parsed_decision.selected_node_id %}
+                            <div class="timeline-item">
+                                <div class="timeline-marker bg-{{ node_exec.status|yesno:'success,danger,secondary' }}">
+                                    <i class="fas fa-{{ node_exec.status|yesno:'check,times,clock' }} text-white"></i>
+                                </div>
+                                <div class="timeline-content">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <h6 class="mb-1">Node Execution: {{ node_exec.node.name }}</h6>
+                                            <p class="text-muted small mb-0">
+                                                {% if node_exec.started_at %}
+                                                    Started: {{ node_exec.started_at|date:"H:i:s" }}
+                                                {% endif %}
+                                                {% if node_exec.completed_at %}
+                                                    | Duration: {{ node_exec.completed_at|timeuntil:node_exec.started_at }}
+                                                {% endif %}
+                                            </p>
+                                        </div>
+                                        <span class="badge bg-{{ node_exec.status|yesno:'success,danger,secondary' }}">
+                                            {{ node_exec.get_status_display }}
+                                        </span>
+                                    </div>
+                                    
+                                    {% if node_exec.error_message %}
+                                    <div class="alert alert-danger mt-2 mb-0">
+                                        <strong>Error:</strong> {{ node_exec.error_message|truncatewords:50 }}
+                                    </div>
+                                    {% endif %}
+                                    
+                                    <button class="btn btn-sm btn-outline-info mt-2" 
+                                            onclick="showNodeDetails('{{ node_exec.pk }}')">
+                                        <i class="fas fa-eye"></i> View Details
+                                    </button>
+                                </div>
+                            </div>
+                            {% endif %}
+                        {% endfor %}
+                    {% endfor %}
+                {% else %}
+                    <!-- Deterministic timeline -->
+                    {% for node_exec in node_executions %}
+                        <!-- Implicit decision for deterministic mode -->
+                        <div class="timeline-item">
+                            <div class="timeline-marker bg-secondary">
+                                <i class="fas fa-list-ol text-white"></i>
+                            </div>
+                            <div class="timeline-content">
+                                <h6 class="mb-1">
+                                    <span class="badge bg-secondary">Order {{ node_exec.node.order }}</span>
+                                    Next node selected based on pipeline order
+                                </h6>
+                                <p class="text-muted small mb-0">Deterministic execution</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Node Execution -->
+                        <div class="timeline-item">
+                            <div class="timeline-marker bg-{{ node_exec.status|yesno:'success,danger,secondary' }}">
+                                <i class="fas fa-{{ node_exec.status|yesno:'check,times,clock' }} text-white"></i>
+                            </div>
+                            <div class="timeline-content">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <h6 class="mb-1">Node Execution: {{ node_exec.node.name }}</h6>
+                                        <p class="text-muted small mb-0">
+                                            {% if node_exec.started_at %}
+                                                Started: {{ node_exec.started_at|date:"H:i:s" }}
+                                            {% endif %}
+                                            {% if node_exec.completed_at %}
+                                                | Duration: {{ node_exec.completed_at|timeuntil:node_exec.started_at %}
+                                            {% endif %}
+                                        </p>
+                                    </div>
+                                    <span class="badge bg-{{ node_exec.status|yesno:'success,danger,secondary' }}">
+                                        {{ node_exec.get_status_display }}
+                                    </span>
+                                </div>
+                                
+                                {% if node_exec.error_message %}
+                                <div class="alert alert-danger mt-2 mb-0">
+                                    <strong>Error:</strong> {{ node_exec.error_message|truncatewords:50 }}
+                                </div>
+                                {% endif %}
+                                
+                                <button class="btn btn-sm btn-outline-info mt-2" 
+                                        onclick="showNodeDetails('{{ node_exec.pk }}')">
+                                    <i class="fas fa-eye"></i> View Details
+                                </button>
+                            </div>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
         </div>
     </div>
     
@@ -283,6 +528,132 @@
                     <p class="text-muted">No node executions found.</p>
                 </div>
             {% endif %}
+        </div>
+    </div>
+    
+    <!-- Debug / Inspection Section -->
+    <div class="card mb-4">
+        <div class="card-header" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#debugSection">
+            <h5 class="mb-0">
+                <i class="fas fa-bug"></i> Debug / Inspection
+                <small class="text-muted">(Click to expand)</small>
+            </h5>
+        </div>
+        <div class="collapse" id="debugSection">
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6><i class="fas fa-cog"></i> Execution Configuration</h6>
+                        <table class="table table-sm table-bordered">
+                            <tr>
+                                <th style="width: 40%;">Execution Mode:</th>
+                                <td>
+                                    {% if execution_mode == 'agent' %}
+                                        <span class="badge bg-info">Agent-Controlled</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">Deterministic</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% if agent_run %}
+                            <tr>
+                                <th>Planner Type:</th>
+                                <td>
+                                    {% if agent_run.agent_config.model %}
+                                        LLM ({{ agent_run.agent_config.model }})
+                                    {% else %}
+                                        Deterministic (Fallback)
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            <tr>
+                                <th>Agent Run ID:</th>
+                                <td><code>{{ agent_run.pk }}</code></td>
+                            </tr>
+                            <tr>
+                                <th>Current Step:</th>
+                                <td>{{ agent_run.current_step|default:0 }} / {{ agent_run.max_steps }}</td>
+                            </tr>
+                            <tr>
+                                <th>Human Intervention:</th>
+                                <td>
+                                    {% if agent_run.human_intervention_required %}
+                                        <span class="badge bg-warning">Required</span>
+                                        {% if agent_run.human_intervention_reason %}
+                                        <br><small>{{ agent_run.human_intervention_reason }}</small>
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="badge bg-success">Not Required</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endif %}
+                            <tr>
+                                <th>Pipeline Execution ID:</th>
+                                <td><code>{{ execution.pk }}</code></td>
+                            </tr>
+                            <tr>
+                                <th>Termination Reason:</th>
+                                <td>
+                                    {% if execution.status == 'completed' %}
+                                        <span class="text-success">Normal completion</span>
+                                    {% elif execution.status == 'failed' %}
+                                        <span class="text-danger">Failed - {{ execution.error_message|default:"Unknown error" }}</span>
+                                    {% elif agent_run.human_intervention_required %}
+                                        <span class="text-warning">Paused for human review</span>
+                                    {% else %}
+                                        <span class="text-muted">{{ execution.get_status_display }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <h6><i class="fas fa-shield-alt"></i> Guardrail Configuration</h6>
+                        {% if agent_run and agent_run.agent_config.guardrail_config %}
+                        <pre class="bg-dark text-light p-3 rounded" style="font-size: 0.85em; max-height: 200px; overflow-y: auto;">{{ agent_run.agent_config.guardrail_config|pprint }}</pre>
+                        {% elif agent_run and agent_run.agent_config %}
+                        <div class="alert alert-info">No explicit guardrail configuration. Using defaults.</div>
+                        {% else %}
+                        <div class="alert alert-secondary">N/A - Deterministic execution</div>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                {% if agent_run %}
+                <div class="row mt-3">
+                    <div class="col-md-12">
+                        <h6><i class="fas fa-file-code"></i> Agent Configuration (Raw JSON)</h6>
+                        <pre class="bg-dark text-light p-3 rounded" style="font-size: 0.85em; max-height: 300px; overflow-y: auto;">{{ agent_run.agent_config|pprint }}</pre>
+                    </div>
+                </div>
+                {% endif %}
+                
+                {% if agent_decisions %}
+                <div class="row mt-3">
+                    <div class="col-md-12">
+                        <h6><i class="fas fa-brain"></i> Planner Decisions (Raw Data)</h6>
+                        <div class="accordion" id="decisionsAccordion">
+                            {% for decision in agent_decisions %}
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="heading{{ decision.pk }}">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ decision.pk }}">
+                                        Step {{ decision.step_number }}: {{ decision.decision_type }} - {{ decision.timestamp|date:"H:i:s" }}
+                                    </button>
+                                </h2>
+                                <div id="collapse{{ decision.pk }}" class="accordion-collapse collapse" data-bs-parent="#decisionsAccordion">
+                                    <div class="accordion-body">
+                                        <pre class="bg-dark text-light p-3 rounded mb-0" style="font-size: 0.85em;">{{ decision.parsed_decision|pprint }}</pre>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
         </div>
     </div>
     

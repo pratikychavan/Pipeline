@@ -20,12 +20,12 @@ urlpatterns = [
     # Control Plane Dashboard
     path('control-plane/', cp_views.control_plane_dashboard, name='cp_dashboard'),
     
-    # Agent Profile CRUD
+    # Agent Profile Views (READ-ONLY + GOVERNANCE)
     path('control-plane/agents/', cp_views.agent_list, name='cp_agent_list'),
     path('control-plane/agents/api/', cp_views.agent_list_api, name='cp_agent_list_api'),
-    path('control-plane/agents/create/', cp_views.agent_create, name='cp_agent_create'),
+    path('control-plane/agents/bind-workspace/', cp_views.agent_create_from_workspace, name='cp_agent_create_from_workspace'),
     path('control-plane/agents/<uuid:agent_id>/', cp_views.agent_detail, name='cp_agent_detail'),
-    path('control-plane/agents/<uuid:agent_id>/edit/', cp_views.agent_edit, name='cp_agent_edit'),
+    path('control-plane/agents/<uuid:agent_id>/validate/', cp_views.agent_validate, name='cp_agent_validate'),
     path('control-plane/agents/<uuid:agent_id>/activate/', cp_views.agent_activate, name='cp_agent_activate'),
     path('control-plane/agents/<uuid:agent_id>/deactivate/', cp_views.agent_deactivate, name='cp_agent_deactivate'),
     

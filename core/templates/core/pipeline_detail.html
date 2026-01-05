@@ -59,14 +59,8 @@
             <a href="{% url 'pipeline_executions' pipeline.pk %}" class="btn btn-outline-info">
                 <i class="fas fa-history"></i> History
             </a>
-            <form method="post" action="{% url 'agent_integration:start_agent_run_ui' pipeline.pk %}" style="display:inline;">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-outline-warning" title="Start Agent-Orchestrated Execution">
-                    <i class="fas fa-robot"></i> Agent Run
-                </button>
-            </form>
             <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#executeModal">
-                <i class="fas fa-play"></i> Execute
+                <i class="fas fa-play"></i> Run Pipeline
             </button>
             <a href="{% url 'pipeline_delete' pipeline.pk %}" class="btn btn-outline-danger">
                 <i class="fas fa-trash"></i> Delete
@@ -221,47 +215,142 @@
 
 <!-- Execute Pipeline Modal -->
 <div class="modal fade" id="executeModal" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <form method="post" action="{% url 'execute_pipeline' pipeline.pk %}">
+            <form method="post" action="{% url 'execute_pipeline' pipeline.pk %}" id="executePipelineForm">
                 {% csrf_token %}
                 <div class="modal-header">
                     <h5 class="modal-title">
-                        <i class="fas fa-play"></i> Execute Pipeline: {{ pipeline.name }}
+                        <i class="fas fa-play"></i> Run Pipeline: {{ pipeline.name }}
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    {% if pipeline_input_variables %}
-                        <h6>Pipeline Input Variables:</h6>
-                        {% for var_name in pipeline_input_variables %}
-                            <div class="mb-3">
-                                <label for="input_{{ var_name }}" class="form-label">{{ var_name }}</label>
-                                <input type="text" 
-                                       class="form-control" 
-                                       id="input_{{ var_name }}" 
-                                       name="input_{{ var_name }}"
-                                       placeholder="Enter value for {{ var_name }}"
-                                       required>
+                    <!-- Execution Mode Selector -->
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">
+                            <i class="fas fa-cog"></i> Execution Mode
+                        </label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="execution_mode" id="mode_deterministic" value="deterministic" checked onchange="toggleAgentConfig()">
+                            <label class="form-check-label" for="mode_deterministic">
+                                <strong>Deterministic</strong> - Nodes execute in defined order
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="execution_mode" id="mode_agent" value="agent" onchange="toggleAgentConfig()">
+                            <label class="form-check-label" for="mode_agent">
+                                <strong>Agent-Controlled</strong> - LLM planner selects execution order
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Agent Configuration (hidden by default) -->
+                    <div id="agentConfigSection" style="display: none;" class="mb-4 p-3 border rounded bg-light">
+                        <h6 class="mb-3"><i class="fas fa-robot"></i> Agent Configuration</h6>
+                        
+                        <div class="mb-3">
+                            <label for="agent_profile" class="form-label">Agent Profile</label>
+                            <select class="form-select" name="agent_profile" id="agent_profile">
+                                <option value="">Use default configuration...</option>
+                            </select>
+                            <div class="form-text">Select a validated agent profile or use default settings</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="agent_model" class="form-label">LLM Model (if no profile selected)</label>
+                            <select class="form-select" name="agent_model" id="agent_model">
+                                <option value="gpt-4o-mini" selected>GPT-4o Mini (Recommended)</option>
+                                <option value="gpt-4o">GPT-4o</option>
+                                <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                            </select>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <label for="agent_temperature" class="form-label">Temperature</label>
+                                <input type="number" class="form-control" name="agent_temperature" id="agent_temperature" value="0.3" min="0" max="2" step="0.1">
+                                <small class="text-muted">0 = deterministic, 2 = creative</small>
                             </div>
-                        {% endfor %}
+                            <div class="col-md-6">
+                                <label for="agent_max_steps" class="form-label">Max Steps</label>
+                                <input type="number" class="form-control" name="agent_max_steps" id="agent_max_steps" value="100" min="1" max="1000">
+                            </div>
+                        </div>
+                        
+                        <div class="form-check mt-3">
+                            <input class="form-check-input" type="checkbox" name="fail_on_node_failure" id="fail_on_node_failure" checked>
+                            <label class="form-check-label" for="fail_on_node_failure">
+                                Stop execution immediately if any node fails
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Pipeline Input Variables -->
+                    {% if pipeline_input_variables %}
+                        <div class="mb-3">
+                            <h6><i class="fas fa-keyboard"></i> Pipeline Input Variables</h6>
+                            {% for var_name in pipeline_input_variables %}
+                                <div class="mb-3">
+                                    <label for="input_{{ var_name }}" class="form-label">{{ var_name }}</label>
+                                    <input type="text" 
+                                           class="form-control" 
+                                           id="input_{{ var_name }}" 
+                                           name="input_{{ var_name }}"
+                                           placeholder="Enter value for {{ var_name }}"
+                                           required>
+                                </div>
+                            {% endfor %}
+                        </div>
                     {% else %}
                         <div class="alert alert-info">
                             <i class="fas fa-info-circle"></i>
-                            This pipeline has no input variables. Click Execute to run it directly.
+                            This pipeline has no input variables.
                         </div>
                     {% endif %}
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="submit" class="btn btn-success">
-                        <i class="fas fa-play"></i> Execute
+                        <i class="fas fa-play"></i> Start Execution
                     </button>
                 </div>
             </form>
         </div>
     </div>
 </div>
+
+<script>
+function toggleAgentConfig() {
+    const agentMode = document.getElementById('mode_agent').checked;
+    const agentConfigSection = document.getElementById('agentConfigSection');
+    agentConfigSection.style.display = agentMode ? 'block' : 'none';
+}
+
+// Load agent profiles when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    const agentProfileSelect = document.getElementById('agent_profile');
+    
+    if (agentProfileSelect) {
+        // Load active and valid agent profiles
+        fetch('/agent/control-plane/agents/api/')
+            .then(response => response.json())
+            .then(data => {
+                if (data && data.agents) {
+                    data.agents.forEach(agent => {
+                        if (agent.status === 'active' && agent.validation_status === 'valid') {
+                            const option = document.createElement('option');
+                            option.value = agent.id;
+                            option.textContent = agent.name;
+                            agentProfileSelect.appendChild(option);
+                        }
+                    });
+                }
+            })
+            .catch(error => console.error('Error loading agent profiles:', error));
+    }
+});
+</script>
 
 <!-- View Node Code Modal -->
 <div class="modal fade" id="nodeCodeModal" tabindex="-1">

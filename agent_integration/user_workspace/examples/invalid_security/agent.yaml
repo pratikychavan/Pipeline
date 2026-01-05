@@ -1,0 +1,8 @@
+name: "Invalid - Security Violations"
+objective: "This will be rejected"
+description: "Example of security violations"
+
+allowed_tools: []
+
+config:
+  model: "gpt-4o-mini"

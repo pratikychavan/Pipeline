@@ -1,12 +1,15 @@
 """
-Control Plane views for agent configuration management.
+Control Plane views for agent governance and execution control.
 
-These views handle CRUD operations for:
-- Agent profiles
-- Tool definitions
-- Agent-Tool mappings
-- Business conditions
-- Agent-Condition bindings
+IMPORTANT: Agent authoring is now in Agent Workspace UI.
+These views are for GOVERNANCE ONLY:
+- View agent definitions (read-only)
+- Validate agents from workspaces
+- Activate/deactivate execution
+- Bind agents to pipelines
+- Configure tools and business conditions
+
+NO MUTATION of agent logic allowed here.
 """
 
 from django.shortcuts import render, get_object_or_404, redirect
@@ -15,6 +18,9 @@ from django.contrib import messages
 from django.views.decorators.http import require_http_methods, require_POST
 from django.db.models import Count, Q
 from django import forms
+from django.http import JsonResponse
+from datetime import datetime, timezone
+import hashlib
 
 from .control_plane_models import (
     AgentProfile,
@@ -24,22 +30,22 @@ from .control_plane_models import (
     AgentConditionBinding,
 )
 from .control_plane_forms import (
-    AgentProfileForm,
     ToolDefinitionForm,
     AgentToolMappingForm,
     BusinessConditionForm,
     AgentConditionBindingForm,
 )
+from core.models import AgentWorkspace
 
 
 # ============================================================================
-# AGENT PROFILE CRUD
+# AGENT PROFILE VIEWS (READ-ONLY + GOVERNANCE)
 # ============================================================================
 
 @login_required
 def agent_list(request):
-    """List all agent profiles."""
-    agents = AgentProfile.objects.all().annotate(
+    """List all agent profiles with workspace sources."""
+    agents = AgentProfile.objects.select_related('workspace').all().annotate(
         tool_count=Count('tool_mappings'),
         condition_count=Count('condition_bindings')
     )
@@ -52,7 +58,7 @@ def agent_list(request):
     context = {
         'agents': agents,
         'status_filter': status_filter,
-        'title': 'Agent Profiles'
+        'title': 'Agent Governance'
     }
     
     return render(request, 'agent_integration/control_plane/agent_list.html', context)
@@ -61,10 +67,8 @@ def agent_list(request):
 @login_required
 def agent_list_api(request):
     """API endpoint to list active agent profiles."""
-    from django.http import JsonResponse
-    
-    agents = AgentProfile.objects.filter(status='active').values(
-        'id', 'name', 'description', 'llm_config', 'status'
+    agents = AgentProfile.objects.filter(status='active').select_related('workspace').values(
+        'id', 'name', 'description', 'status', 'workspace__name', 'validation_status'
     )
     
     return JsonResponse({
@@ -73,34 +77,106 @@ def agent_list_api(request):
 
 
 @login_required
-def agent_create(request):
-    """Create a new agent profile."""
+def agent_create_from_workspace(request):
+    """
+    Create agent profile from an existing workspace.
+    This binds a workspace to Control Plane governance.
+    """
     if request.method == 'POST':
-        form = AgentProfileForm(request.POST)
-        if form.is_valid():
-            agent = form.save(commit=False)
-            agent.created_by = request.user
-            agent.save()
+        workspace_id = request.POST.get('workspace')
+        name = request.POST.get('name', '').strip()
+        
+        if not workspace_id:
+            messages.error(request, 'Please select a workspace')
+            return redirect('agent_integration:cp_agent_create_from_workspace')
+        
+        try:
+            workspace = AgentWorkspace.objects.get(pk=workspace_id)
             
-            messages.success(request, f"Agent profile '{agent.name}' created successfully.")
+            # Check if workspace is valid
+            if workspace.validation_status != 'valid':
+                messages.error(request, f'Workspace "{workspace.name}" must be valid before binding to Control Plane')
+                return redirect('agent_workspace_detail', pk=workspace.id)
+            
+            # Check if agent profile already exists for this workspace
+            if AgentProfile.objects.filter(workspace=workspace).exists():
+                messages.error(request, f'Agent profile already exists for workspace "{workspace.name}"')
+                return redirect('agent_integration:cp_agent_list')
+            
+            # Use workspace name if no custom name provided
+            if not name:
+                name = f"{workspace.name}_agent"
+            
+            # Create agent profile
+            agent = AgentProfile.objects.create(
+                name=name,
+                workspace=workspace,
+                status='draft',
+                validation_status=workspace.validation_status,  # Inherit from workspace
+                created_by=request.user
+            )
+            
+            # Sync basic info from workspace
+            _sync_from_workspace(agent)
+            
+            messages.success(request, f"Agent profile created from workspace '{workspace.name}'")
             return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
-    else:
-        form = AgentProfileForm()
+            
+        except AgentWorkspace.DoesNotExist:
+            messages.error(request, 'Workspace not found')
+            return redirect('agent_integration:cp_agent_create_from_workspace')
+    
+    # GET request - show form
+    # Only show valid workspaces not already bound
+    available_workspaces = AgentWorkspace.objects.filter(
+        validation_status='valid'
+    ).exclude(
+        id__in=AgentProfile.objects.values_list('workspace_id', flat=True).filter(workspace__isnull=False)
+    ).order_by('-updated_at')
     
     context = {
-        'form': form,
-        'title': 'Create Agent Profile',
-        'action': 'Create'
+        'workspaces': available_workspaces,
+        'title': 'Bind Workspace to Control Plane'
     }
     
-    return render(request, 'agent_integration/control_plane/agent_form.html', context)
+    return render(request, 'agent_integration/control_plane/agent_create_from_workspace.html', context)
+
+
+def _sync_from_workspace(agent_profile):
+    """
+    Sync agent profile metadata from workspace.
+    This reads workspace configuration but does NOT store agent logic.
+    """
+    workspace = agent_profile.workspace
+    if not workspace:
+        return
+    
+    # Parse agent.yaml for metadata
+    try:
+        import yaml
+        config = yaml.safe_load(workspace.agent_config)
+        
+        # Sync description if not set
+        if not agent_profile.description and config.get('description'):
+            agent_profile.description = config.get('description')
+        
+        # Calculate version hash
+        content = workspace.agent_code + workspace.agent_config
+        agent_profile.workspace_version_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+        agent_profile.last_validated_at = datetime.now(timezone.utc)
+        
+        agent_profile.save()
+        
+    except Exception as e:
+        # Non-critical - just log
+        print(f"Warning: Could not sync from workspace: {e}")
 
 
 @login_required
 def agent_detail(request, agent_id):
-    """View agent profile details."""
+    """View agent profile details (READ-ONLY)."""
     agent = get_object_or_404(
-        AgentProfile.objects.annotate(
+        AgentProfile.objects.select_related('workspace').annotate(
             tool_count=Count('tool_mappings'),
             condition_count=Count('condition_bindings')
         ),
@@ -110,8 +186,31 @@ def agent_detail(request, agent_id):
     tool_mappings = agent.tool_mappings.select_related('tool').all()
     condition_bindings = agent.condition_bindings.select_related('condition').all()
     
+    # Get workspace info if linked
+    workspace_info = None
+    if agent.workspace:
+        workspace_info = {
+            'id': agent.workspace.id,
+            'name': agent.workspace.name,
+            'planner_class': agent.workspace.planner_class_name,
+            'validation_status': agent.workspace.validation_status,
+            'last_validated': agent.workspace.last_validated_at,
+        }
+        
+        # Parse agent.yaml for display
+        try:
+            import yaml
+            config = yaml.safe_load(agent.workspace.agent_config)
+            workspace_info['objective'] = config.get('objective', 'Not specified')
+            workspace_info['allowed_tools'] = config.get('allowed_tools', [])
+            workspace_info['config'] = config.get('config', {})
+        except:
+            workspace_info['objective'] = 'Error parsing config'
+            workspace_info['allowed_tools'] = []
+    
     context = {
         'agent': agent,
+        'workspace_info': workspace_info,
         'tool_mappings': tool_mappings,
         'condition_bindings': condition_bindings,
         'title': f'Agent: {agent.name}'
@@ -121,52 +220,80 @@ def agent_detail(request, agent_id):
 
 
 @login_required
-def agent_edit(request, agent_id):
-    """Edit agent profile."""
+@require_POST
+def agent_validate(request, agent_id):
+    """
+    Validate agent by re-loading workspace.
+    This checks for workspace changes and re-validates.
+    """
     agent = get_object_or_404(AgentProfile, pk=agent_id)
     
-    # Check if agent can be edited
-    if agent.status == 'active':
-        messages.warning(
-            request,
-            "Warning: Editing an active agent may affect ongoing executions. Consider creating a new version instead."
-        )
+    if not agent.workspace:
+        messages.error(request, "Agent has no linked workspace")
+        return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
     
-    if request.method == 'POST':
-        form = AgentProfileForm(request.POST, instance=agent)
-        if form.is_valid():
-            form.save()
-            messages.success(request, f"Agent profile '{agent.name}' updated successfully.")
-            return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
-    else:
-        form = AgentProfileForm(instance=agent)
+    try:
+        from agent_integration.user_workspace import load_user_workspace
+        from pathlib import Path
+        import tempfile
+        
+        workspace = agent.workspace
+        
+        # Create temporary directory for validation
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_path = Path(temp_dir)
+            
+            # Write files
+            (workspace_path / 'agent.py').write_text(workspace.agent_code)
+            (workspace_path / 'agent.yaml').write_text(workspace.agent_config)
+            if workspace.requirements:
+                (workspace_path / 'requirements.txt').write_text(workspace.requirements)
+            
+            # Validate
+            loaded = load_user_workspace(workspace_path)
+            
+            # Update agent profile
+            _sync_from_workspace(agent)
+            agent.validation_status = 'valid'
+            agent.validation_errors = []
+            agent.save()
+            
+            messages.success(request, f"Agent '{agent.name}' validated successfully from workspace")
+            
+    except Exception as e:
+        agent.validation_status = 'invalid'
+        agent.validation_errors = [str(e)]
+        agent.save()
+        
+        messages.error(request, f"Validation failed: {e}")
     
-    context = {
-        'form': form,
-        'agent': agent,
-        'title': f'Edit Agent: {agent.name}',
-        'action': 'Update'
-    }
-    
-    return render(request, 'agent_integration/control_plane/agent_form.html', context)
+    return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
 
 
 @login_required
 @require_POST
 def agent_activate(request, agent_id):
-    """Activate an agent profile."""
+    """Activate an agent profile for execution."""
     agent = get_object_or_404(AgentProfile, pk=agent_id)
     
     if agent.status != 'draft':
-        messages.error(request, "Only draft agents can be activated.")
+        messages.error(request, "Only draft agents can be activated")
         return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
     
-    # TODO: Validate agent completeness (has tools, conditions, etc.)
+    # Check workspace link
+    if not agent.workspace:
+        messages.error(request, "Cannot activate agent without workspace link")
+        return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
+    
+    # Check validation status
+    if agent.validation_status != 'valid':
+        messages.error(request, "Cannot activate agent with invalid workspace. Validate first.")
+        return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
     
     agent.status = 'active'
     agent.save()
     
-    messages.success(request, f"Agent '{agent.name}' activated successfully.")
+    messages.success(request, f"Agent '{agent.name}' activated successfully")
     return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
 
 
@@ -177,7 +304,7 @@ def agent_deactivate(request, agent_id):
     agent = get_object_or_404(AgentProfile, pk=agent_id)
     
     if agent.status != 'active':
-        messages.error(request, "Only active agents can be deactivated.")
+        messages.error(request, "Only active agents can be deactivated")
         return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
     
     # TODO: Check for active runs
@@ -185,7 +312,7 @@ def agent_deactivate(request, agent_id):
     agent.status = 'archived'
     agent.save()
     
-    messages.success(request, f"Agent '{agent.name}' deactivated and archived.")
+    messages.success(request, f"Agent '{agent.name}' deactivated and archived")
     return redirect('agent_integration:cp_agent_detail', agent_id=agent.id)
 
 
@@ -554,7 +681,7 @@ def control_plane_dashboard(request):
         'active_conditions': BusinessCondition.objects.filter(is_active=True).count(),
     }
     
-    recent_agents = AgentProfile.objects.all().order_by('-created_at')[:5]
+    recent_agents = AgentProfile.objects.select_related('workspace').all().order_by('-created_at')[:5]
     recent_tools = ToolDefinition.objects.all().order_by('-created_at')[:5]
     recent_conditions = BusinessCondition.objects.all().order_by('-created_at')[:5]
     
