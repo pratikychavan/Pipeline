@@ -44,7 +44,7 @@
                                         {% endif %}
                                     </td>
                                     <td>
-                                        <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }}">
+                                        <span class="badge {% if execution.status == 'completed' %}bg-success{% elif execution.status == 'failed' %}bg-danger{% elif execution.status == 'running' %}bg-warning{% else %}bg-secondary{% endif %}">
                                             {{ execution.get_status_display }}
                                         </span>
                                     </td>

@@ -5,7 +5,6 @@
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2><i class="fas fa-toolbox"></i> {{ tool.name }} {% if tool.is_enabled %}<span class="badge bg-success">ENABLED</span>{% else %}<span class="badge bg-secondary">DISABLED</span>{% endif %}</h2>
         <div>
-            <a href="{% url 'agent_integration:cp_tool_list' %}" class="btn btn-outline-secondary"><i class="fas fa-arrow-left"></i> Back</a>
             <a href="{% url 'agent_integration:cp_tool_edit' tool.id %}" class="btn btn-primary"><i class="fas fa-edit"></i> Edit</a>
             <form method="post" action="{% url 'agent_integration:cp_tool_toggle' tool.id %}" style="display:inline;">
                 {% csrf_token %}

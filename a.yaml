@@ -1,0 +1,42 @@
+name: "Risk Assessment Intelligence Agent"
+objective: "Intelligently orchestrate customer risk assessment with conditional logic and human-in-the-loop"
+description: |
+  A specialized planner for customer onboarding and risk assessment pipelines.
+  
+  Key Features:
+  - Data validation gating (fail-fast on bad data)
+  - Risk-based conditional execution
+  - Human-in-the-loop for failures and high-risk cases
+  - Intelligent notification routing based on risk level
+  
+  Tool Execution Strategy:
+  1. ValidateDataQuality (CRITICAL GATE)
+  2. AssessRiskScore (only if validation passes)
+  3. GenerateRecommendations (always after risk assessment)
+  4. SendNotifications (conditional - only for HIGH/MEDIUM risk)
+
+allowed_tools:
+  - fetch_customer_data
+  - validate_data_quality
+  - assess_risk_score
+  - generate_recommendations
+  - send_notifications
+
+config:
+  model: "gpt-4o-mini"
+  temperature: 0.2
+  max_steps: 10
+  max_execution_time: 180
+
+constraints:
+  max_cost_usd: 0.25
+  require_approval_for_high_risk: true
+  
+guardrails:
+  - type: "data_validation_required"
+    severity: "critical"
+    message: "Must validate data before risk assessment"
+  
+  - type: "human_review_on_failure"
+    severity: "high"
+    message: "Request human review if validation fails"

@@ -334,20 +334,40 @@ document.addEventListener('DOMContentLoaded', function() {
     if (agentProfileSelect) {
         // Load active and valid agent profiles
         fetch('/agent/control-plane/agents/api/')
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to load agent profiles');
+                }
+                return response.json();
+            })
             .then(data => {
-                if (data && data.agents) {
+                console.log('Agent profiles loaded:', data);
+                if (data && data.agents && data.agents.length > 0) {
                     data.agents.forEach(agent => {
                         if (agent.status === 'active' && agent.validation_status === 'valid') {
                             const option = document.createElement('option');
                             option.value = agent.id;
-                            option.textContent = agent.name;
+                            option.textContent = `${agent.name}${agent.workspace__name ? ' (' + agent.workspace__name + ')' : ''}`;
                             agentProfileSelect.appendChild(option);
                         }
                     });
+                } else {
+                    // Add a message when no agents available
+                    const option = document.createElement('option');
+                    option.value = '';
+                    option.textContent = 'No active agent profiles available';
+                    option.disabled = true;
+                    agentProfileSelect.appendChild(option);
                 }
             })
-            .catch(error => console.error('Error loading agent profiles:', error));
+            .catch(error => {
+                console.error('Error loading agent profiles:', error);
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = 'Error loading agent profiles';
+                option.disabled = true;
+                agentProfileSelect.appendChild(option);
+            });
     }
 });
 </script>

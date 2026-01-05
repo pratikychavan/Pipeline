@@ -171,7 +171,7 @@
             </p>
         </div>
         <div>
-            <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }} fs-6">
+            <span class="badge {% if execution.status == 'completed' %}bg-success{% elif execution.status == 'failed' %}bg-danger{% elif execution.status == 'running' %}bg-warning{% else %}bg-secondary{% endif %} fs-6">
                 {{ execution.get_status_display }}
             </span>
         </div>
@@ -268,7 +268,7 @@
                 </div>
                 <div class="col-md-2">
                     <strong>Status:</strong><br>
-                    <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }}">
+                    <span class="badge {% if execution.status == 'completed' %}bg-success{% elif execution.status == 'failed' %}bg-danger{% elif execution.status == 'running' %}bg-warning{% else %}bg-secondary{% endif %}">
                         {{ execution.get_status_display }}
                     </span>
                 </div>

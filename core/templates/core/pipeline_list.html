@@ -99,17 +99,78 @@
         {% for pipeline in pipelines %}
         <!-- Execute Modal -->
         <div class="modal fade" id="executeModal{{ pipeline.pk }}" tabindex="-1">
-            <div class="modal-dialog">
+            <div class="modal-dialog modal-lg">
                 <div class="modal-content">
                     <form method="post" action="{% url 'execute_pipeline' pipeline.pk %}">
                         {% csrf_token %}
                         <div class="modal-header">
                             <h5 class="modal-title">
-                                <i class="fas fa-play"></i> Execute Pipeline: {{ pipeline.name }}
+                                <i class="fas fa-play"></i> Run Pipeline: {{ pipeline.name }}
                             </h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                         </div>
                         <div class="modal-body">
+                            <!-- Execution Mode Selector -->
+                            <div class="mb-4">
+                                <label class="form-label fw-bold">
+                                    <i class="fas fa-cog"></i> Execution Mode
+                                </label>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="execution_mode" id="mode_deterministic_{{ pipeline.pk }}" value="deterministic" checked onchange="toggleAgentConfigList('{{ pipeline.pk }}')">
+                                    <label class="form-check-label" for="mode_deterministic_{{ pipeline.pk }}">
+                                        <strong>Deterministic</strong> - Nodes execute in defined order
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="execution_mode" id="mode_agent_{{ pipeline.pk }}" value="agent" onchange="toggleAgentConfigList('{{ pipeline.pk }}')">
+                                    <label class="form-check-label" for="mode_agent_{{ pipeline.pk }}">
+                                        <strong>Agent-Controlled</strong> - LLM planner selects execution order
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <!-- Agent Configuration (hidden by default) -->
+                            <div id="agentConfigSection_{{ pipeline.pk }}" style="display: none;" class="mb-4 p-3 border rounded bg-light">
+                                <h6 class="mb-3"><i class="fas fa-robot"></i> Agent Configuration</h6>
+                                
+                                <div class="mb-3">
+                                    <label for="agent_profile_{{ pipeline.pk }}" class="form-label">Agent Profile</label>
+                                    <select class="form-select agent-profile-select" name="agent_profile" id="agent_profile_{{ pipeline.pk }}" data-pipeline-id="{{ pipeline.pk }}">
+                                        <option value="">Use default configuration...</option>
+                                    </select>
+                                    <div class="form-text">Select a validated agent profile or use default settings</div>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label for="agent_model_{{ pipeline.pk }}" class="form-label">LLM Model (if no profile selected)</label>
+                                    <select class="form-select" name="agent_model" id="agent_model_{{ pipeline.pk }}">
+                                        <option value="gpt-4o-mini" selected>GPT-4o Mini (Recommended)</option>
+                                        <option value="gpt-4o">GPT-4o</option>
+                                        <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <label for="agent_temperature_{{ pipeline.pk }}" class="form-label">Temperature</label>
+                                        <input type="number" class="form-control" name="agent_temperature" id="agent_temperature_{{ pipeline.pk }}" value="0.3" min="0" max="2" step="0.1">
+                                        <small class="text-muted">0 = deterministic, 2 = creative</small>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="agent_max_steps_{{ pipeline.pk }}" class="form-label">Max Steps</label>
+                                        <input type="number" class="form-control" name="agent_max_steps" id="agent_max_steps_{{ pipeline.pk }}" value="100" min="1" max="1000">
+                                    </div>
+                                </div>
+                                
+                                <div class="form-check mt-3">
+                                    <input class="form-check-input" type="checkbox" name="fail_on_node_failure" id="fail_on_node_failure_{{ pipeline.pk }}" checked>
+                                    <label class="form-check-label" for="fail_on_node_failure_{{ pipeline.pk }}">
+                                        Stop execution immediately if any node fails
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <!-- Pipeline Input Variables -->
                             <div id="pipelineInputs{{ pipeline.pk }}">
                                 <div class="text-center">
                                     <div class="spinner-border" role="status">
@@ -122,7 +183,7 @@
                         <div class="modal-footer">
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                             <button type="submit" class="btn btn-success">
-                                <i class="fas fa-play"></i> Execute
+                                <i class="fas fa-play"></i> Start Execution
                             </button>
                         </div>
                     </form>
@@ -187,7 +248,7 @@ function loadPipelineInputs(pipelineId) {
                 inputContainer.innerHTML = `
                     <div class="alert alert-info">
                         <i class="fas fa-info-circle"></i>
-                        This pipeline has no input variables. Click Execute to run it directly.
+                        This pipeline has no input variables. Click Start Execution to run it directly.
                     </div>
                 `;
             }
@@ -203,8 +264,61 @@ function loadPipelineInputs(pipelineId) {
         });
 }
 
+// Toggle agent config visibility in list view
+function toggleAgentConfigList(pipelineId) {
+    const agentMode = document.getElementById(`mode_agent_${pipelineId}`).checked;
+    const agentConfigSection = document.getElementById(`agentConfigSection_${pipelineId}`);
+    agentConfigSection.style.display = agentMode ? 'block' : 'none';
+}
+
+// Load agent profiles for all modals
+function loadAgentProfiles() {
+    fetch('/agent/control-plane/agents/api/')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to load agent profiles');
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Agent profiles loaded:', data);
+            
+            // Populate all agent profile dropdowns
+            const selects = document.querySelectorAll('.agent-profile-select');
+            selects.forEach(select => {
+                // Clear existing options except the first one
+                while (select.options.length > 1) {
+                    select.remove(1);
+                }
+                
+                if (data && data.agents && data.agents.length > 0) {
+                    data.agents.forEach(agent => {
+                        if (agent.status === 'active' && agent.validation_status === 'valid') {
+                            const option = document.createElement('option');
+                            option.value = agent.id;
+                            option.textContent = `${agent.name}${agent.workspace__name ? ' (' + agent.workspace__name + ')' : ''}`;
+                            select.appendChild(option);
+                        }
+                    });
+                } else {
+                    const option = document.createElement('option');
+                    option.value = '';
+                    option.textContent = 'No active agent profiles available';
+                    option.disabled = true;
+                    select.appendChild(option);
+                }
+            });
+        })
+        .catch(error => {
+            console.error('Error loading agent profiles:', error);
+        });
+}
+
 // Add event listeners to modals
 document.addEventListener('DOMContentLoaded', function() {
+    // Load agent profiles once on page load
+    loadAgentProfiles();
+    
     // Find all execute modals and add event listeners
     const modals = document.querySelectorAll('[id^="executeModal"]');
     modals.forEach(function(modal) {

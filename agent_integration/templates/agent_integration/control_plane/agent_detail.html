@@ -19,9 +19,6 @@
             {% endif %}
         </h2>
         <div>
-            <a href="{% url 'agent_integration:cp_agent_list' %}" class="btn btn-outline-secondary">
-                <i class="fas fa-arrow-left"></i> Back
-            </a>
             {% if agent.workspace %}
                 <a href="{% url 'agent_workspace_detail' agent.workspace.id %}" class="btn btn-primary">
                     <i class="fas fa-edit"></i> Edit in Workspace

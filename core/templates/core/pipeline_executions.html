@@ -49,8 +49,8 @@
                                     {% for execution in executions %}
                                         <tr>
                                             <td>
-                                                <span class="badge bg-{{ execution.status|yesno:'success,danger,warning' }}">
-                                                    <i class="fas fa-{{ execution.status|yesno:'check,times,clock' }}"></i>
+                                                <span class="badge {% if execution.status == 'completed' %}bg-success{% elif execution.status == 'failed' %}bg-danger{% elif execution.status == 'running' %}bg-warning{% else %}bg-secondary{% endif %}">
+                                                    <i class="fas fa-{% if execution.status == 'completed' %}check{% elif execution.status == 'failed' %}times{% elif execution.status == 'running' %}clock{% else %}question{% endif %}"></i>
                                                     {{ execution.get_status_display }}
                                                 </span>
                                             </td>
